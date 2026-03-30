@@ -92,7 +92,7 @@ function getElapsedSeconds(start: string, end?: string | null) {
 }
 
 function getShortOrderNumber(orderId: number) {
-  return `A${String(orderId).padStart(3, "0")}`;
+  return `STT-${String(orderId).padStart(6, "0")}`;
 }
 
 export default function Home() {
