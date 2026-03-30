@@ -24,6 +24,13 @@ type CustomerRow = {
   phone: string;
 };
 
+type OrderItemRow = {
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+};
+
 type ActiveOrder = {
   id: number;
   order_number: string;
@@ -36,6 +43,7 @@ type ActiveOrder = {
   collected_at: string | null;
   customer_id: number | null;
   customer: CustomerRow | null;
+  items: OrderItemRow[];
 };
 
 function formatCurrency(value: number) {
@@ -66,6 +74,19 @@ function generateOrderNumber() {
   return `ORD-${y}${m}${d}-${h}${min}${s}`;
 }
 
+function formatDurationFromSeconds(totalSeconds: number) {
+  const safe = Math.max(0, totalSeconds);
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+function getElapsedSeconds(start: string, end?: string | null) {
+  const startMs = new Date(start).getTime();
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  return Math.max(0, Math.floor((endMs - startMs) / 1000));
+}
+
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -76,10 +97,19 @@ export default function Home() {
   const [todayOrders, setTodayOrders] = useState(0);
   const [statusMessage, setStatusMessage] = useState("Loading...");
   const [saving, setSaving] = useState(false);
+  const [nowTick, setNowTick] = useState(Date.now());
 
   const cartTotal = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   }, [cart]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   async function loadProducts() {
     const { data, error } = await supabase
@@ -123,7 +153,10 @@ export default function Home() {
       .map((o) => o.customer_id)
       .filter((id) => id !== null && id !== undefined);
 
+    const orderIds = rawOrders.map((o) => o.id);
+
     const customerMap = new Map<number, CustomerRow>();
+    const itemsMap = new Map<number, OrderItemRow[]>();
 
     if (customerIds.length > 0) {
       const { data: customersData, error: customersError } = await supabase
@@ -138,6 +171,27 @@ export default function Home() {
             name: c.name ?? null,
             phone: String(c.phone),
           });
+        });
+      }
+    }
+
+    if (orderIds.length > 0) {
+      const { data: orderItemsData, error: orderItemsError } = await supabase
+        .from("order_items")
+        .select("*")
+        .in("order_id", orderIds);
+
+      if (!orderItemsError) {
+        (orderItemsData || []).forEach((item: any) => {
+          const orderId = Number(item.order_id);
+          const current = itemsMap.get(orderId) || [];
+          current.push({
+            product_name: String(item.product_name),
+            quantity: Number(item.quantity),
+            unit_price: Number(item.unit_price),
+            line_total: Number(item.line_total),
+          });
+          itemsMap.set(orderId, current);
         });
       }
     }
@@ -160,6 +214,7 @@ export default function Home() {
         order.customer_id === null || order.customer_id === undefined
           ? null
           : customerMap.get(Number(order.customer_id)) || null,
+      items: itemsMap.get(Number(order.id)) || [],
     }));
 
     setActiveOrders(merged);
@@ -178,9 +233,7 @@ export default function Home() {
 
     const rows: any[] = data || [];
     setTodayOrders(rows.length);
-    setTodaySales(
-      rows.reduce((sum, row) => sum + Number(row.total || 0), 0)
-    );
+    setTodaySales(rows.reduce((sum, row) => sum + Number(row.total || 0), 0));
   }
 
   async function refreshAll() {
@@ -316,11 +369,13 @@ export default function Home() {
   }
 
   async function markReadyAndOpenWhatsApp(order: ActiveOrder) {
+    const readyTimestamp = new Date().toISOString();
+
     const { error } = await supabase
       .from("orders")
       .update({
         status: "Ready",
-        ready_at: new Date().toISOString(),
+        ready_at: readyTimestamp,
       })
       .eq("id", order.id);
 
@@ -559,83 +614,149 @@ export default function Home() {
               {activeOrders.length === 0 ? (
                 <p className="text-slate-500">No active orders yet.</p>
               ) : (
-                activeOrders.map((order) => (
-                  <div key={order.id} className="rounded-xl border p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-lg font-bold">
-                          {order.order_number}
-                        </div>
-                        <div className="text-sm text-slate-500">
-                          {order.customer?.name || "Guest"}{" "}
-                          {"|"}{" "}
-                          {order.customer?.phone || "-"}
-                        </div>
-                        <div className="text-sm text-slate-500">
-                          {formatTime(order.created_at)}
-                        </div>
-                        <div className="mt-2">
-                          <span className="rounded-full bg-slate-100 px-3 py-1 text-sm">
-                            {order.status}
-                          </span>
-                        </div>
-                        <div className="mt-2 font-semibold">
-                          {formatCurrency(order.total)}
+                activeOrders.map((order) => {
+                  const elapsedSeconds =
+                    order.status === "Ready" && order.ready_at
+                      ? getElapsedSeconds(order.created_at, order.ready_at)
+                      : getElapsedSeconds(order.created_at);
+
+                  return (
+                    <div key={order.id} className="rounded-xl border p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="w-full">
+                          <div className="text-lg font-bold">
+                            {order.order_number}
+                          </div>
+
+                          <div className="text-sm text-slate-500">
+                            {order.customer?.name || "Guest"} |{" "}
+                            {order.customer?.phone || "-"}
+                          </div>
+
+                          <div className="text-sm text-slate-500">
+                            Created: {formatTime(order.created_at)}
+                          </div>
+
+                          {order.ready_at && (
+                            <div className="text-sm text-slate-500">
+                              Ready: {formatTime(order.ready_at)}
+                            </div>
+                          )}
+
+                          <div className="mt-2">
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-sm">
+                              {order.status}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 font-semibold">
+                            {formatCurrency(order.total)}
+                          </div>
+
+                          <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                            <div className="font-medium">
+                              {order.status === "Ready"
+                                ? "Time taken to fulfill"
+                                : "Elapsed time"}
+                            </div>
+                            <div className="text-lg font-bold">
+                              {formatDurationFromSeconds(elapsedSeconds)}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 rounded-lg border bg-slate-50 p-3">
+                            <div className="mb-2 text-sm font-medium">
+                              Order Details
+                            </div>
+                            {order.items.length === 0 ? (
+                              <div className="text-sm text-slate-500">
+                                No item details found.
+                              </div>
+                            ) : (
+                              <div className="space-y-1 text-sm">
+                                {order.items.map((item, index) => (
+                                  <div
+                                    key={`${order.id}-${index}`}
+                                    className="flex items-center justify-between gap-3"
+                                  >
+                                    <span>
+                                      {item.product_name} x {item.quantity}
+                                    </span>
+                                    <span>{formatCurrency(item.line_total)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {order.reminder1_sent_at && (
+                            <div className="mt-2 text-xs text-amber-700">
+                              Reminder 1 sent:{" "}
+                              {formatTime(order.reminder1_sent_at)}
+                            </div>
+                          )}
+
+                          {order.reminder2_sent_at && (
+                            <div className="mt-1 text-xs text-orange-700">
+                              Reminder 2 sent:{" "}
+                              {formatTime(order.reminder2_sent_at)}
+                            </div>
+                          )}
                         </div>
                       </div>
-                    </div>
 
-                    <div className="mt-4 flex flex-col gap-2">
-                      {order.status !== "Ready" && (
-                        <button
-                          onClick={() => markReadyAndOpenWhatsApp(order)}
-                          className="rounded-xl bg-green-600 px-4 py-2 font-medium text-white"
-                        >
-                          Ready + WhatsApp
-                        </button>
-                      )}
-
-                      {order.status === "Ready" && !order.reminder1_sent_at && (
-                        <button
-                          onClick={() => sendReminder1(order)}
-                          className="rounded-xl bg-amber-500 px-4 py-2 font-medium text-white"
-                        >
-                          Reminder 1
-                        </button>
-                      )}
-
-                      {order.status === "Ready" &&
-                        order.reminder1_sent_at &&
-                        !order.reminder2_sent_at && (
+                      <div className="mt-4 flex flex-col gap-2">
+                        {order.status !== "Ready" && (
                           <button
-                            onClick={() => sendReminder2(order)}
-                            className="rounded-xl bg-orange-600 px-4 py-2 font-medium text-white"
+                            onClick={() => markReadyAndOpenWhatsApp(order)}
+                            className="rounded-xl bg-green-600 px-4 py-2 font-medium text-white"
                           >
-                            Reminder 2
+                            Ready + WhatsApp
                           </button>
                         )}
 
-                      {order.status === "Ready" && order.reminder1_sent_at && (
-                        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
-                          Reminder 1 sent
-                        </div>
-                      )}
+                        {order.status === "Ready" && !order.reminder1_sent_at && (
+                          <button
+                            onClick={() => sendReminder1(order)}
+                            className="rounded-xl bg-amber-500 px-4 py-2 font-medium text-white"
+                          >
+                            Reminder 1
+                          </button>
+                        )}
 
-                      {order.status === "Ready" && order.reminder2_sent_at && (
-                        <div className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-2 text-sm">
-                          Reminder 2 sent
-                        </div>
-                      )}
+                        {order.status === "Ready" &&
+                          order.reminder1_sent_at &&
+                          !order.reminder2_sent_at && (
+                            <button
+                              onClick={() => sendReminder2(order)}
+                              className="rounded-xl bg-orange-600 px-4 py-2 font-medium text-white"
+                            >
+                              Reminder 2
+                            </button>
+                          )}
 
-                      <button
-                        onClick={() => markCollected(order.id)}
-                        className="rounded-xl border px-4 py-2"
-                      >
-                        Mark Collected
-                      </button>
+                        {order.status === "Ready" && order.reminder1_sent_at && (
+                          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
+                            Reminder 1 sent
+                          </div>
+                        )}
+
+                        {order.status === "Ready" && order.reminder2_sent_at && (
+                          <div className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-2 text-sm">
+                            Reminder 2 sent
+                          </div>
+                        )}
+
+                        <button
+                          onClick={() => markCollected(order.id)}
+                          className="rounded-xl border px-4 py-2"
+                        >
+                          Mark Collected
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>
