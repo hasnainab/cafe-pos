@@ -29,6 +29,15 @@ type SalesTax = {
   active: boolean | null;
 };
 
+type LoyaltyPromotion = {
+  id: number;
+  name: string;
+  start_at: string;
+  end_at: string;
+  multiplier: number;
+  active: boolean | null;
+};
+
 type Product = {
   id: number;
   name: string;
@@ -45,12 +54,17 @@ type CartItem = {
   quantity: number;
   modifiers: ModifierLibraryItem[];
   notes: string;
+  pricing_mode: "normal" | "discounted" | "complimentary";
+  discounted_unit_price: number | null;
 };
 
 type CustomerRow = {
   id: number;
   name: string | null;
   phone: string;
+  reward_points: number;
+  lifetime_eligible_spend: number;
+  manual_bonus_percent: number;
 };
 
 type OrderItemRow = {
@@ -69,6 +83,13 @@ type OrderView = {
   total: number;
   subtotal: number;
   tax_total: number;
+  discount_total: number;
+  points_earned: number;
+  points_redeemed: number;
+  eligible_subtotal: number;
+  non_eligible_subtotal: number;
+  effective_reward_percent: number;
+  reward_multiplier: number;
   created_at: string;
   ready_at: string | null;
   reminder1_sent_at: string | null;
@@ -86,7 +107,15 @@ type TopItem = {
   sales: number;
 };
 
-type ViewMode = "pos" | "products" | "history" | "reports";
+type CustomerLedgerEntry = {
+  id: number;
+  entry_type: string;
+  points: number;
+  note: string | null;
+  created_at: string;
+};
+
+type ViewMode = "pos" | "setup" | "history" | "reports";
 
 type ProductForm = {
   id: number | null;
@@ -121,6 +150,15 @@ type SalesTaxForm = {
   id: number | null;
   name: string;
   rate_percent: string;
+  active: boolean;
+};
+
+type PromotionForm = {
+  id: number | null;
+  name: string;
+  start_at: string;
+  end_at: string;
+  multiplier: string;
   active: boolean;
 };
 
@@ -183,6 +221,21 @@ async function getNextDailyOrderNumber() {
   return `STT-${String(nextNumber).padStart(6, "0")}`;
 }
 
+function getTierRateFromSpend(lifetimeEligibleSpend: number) {
+  const increments = Math.floor(Math.max(0, lifetimeEligibleSpend) / 15000);
+  return Math.min(5 + increments, 10);
+}
+
+function getEffectiveRewardRate(
+  lifetimeEligibleSpend: number,
+  manualBonusPercent: number
+) {
+  return Math.min(
+    getTierRateFromSpend(lifetimeEligibleSpend) + Math.max(0, manualBonusPercent),
+    10
+  );
+}
+
 export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>("pos");
 
@@ -191,6 +244,7 @@ export default function Home() {
   const [modifierLibrary, setModifierLibrary] = useState<ModifierLibraryItem[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [salesTaxes, setSalesTaxes] = useState<SalesTax[]>([]);
+  const [promotions, setPromotions] = useState<LoyaltyPromotion[]>([]);
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("");
@@ -213,6 +267,14 @@ export default function Home() {
   const [selectedProductForCart, setSelectedProductForCart] = useState<Product | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<number[]>([]);
   const [lineNotes, setLineNotes] = useState("");
+  const [linePricingMode, setLinePricingMode] = useState<"normal" | "discounted" | "complimentary">("normal");
+  const [lineDiscountedUnitPrice, setLineDiscountedUnitPrice] = useState("");
+
+  const [currentCustomer, setCurrentCustomer] = useState<CustomerRow | null>(null);
+  const [customerRecentOrders, setCustomerRecentOrders] = useState<OrderView[]>([]);
+  const [customerPointsLedger, setCustomerPointsLedger] = useState<CustomerLedgerEntry[]>([]);
+  const [redeemPointsInput, setRedeemPointsInput] = useState("0");
+  const [manualBonusInput, setManualBonusInput] = useState("");
 
   const [productForm, setProductForm] = useState<ProductForm>({
     id: null,
@@ -250,8 +312,28 @@ export default function Home() {
     active: true,
   });
 
+  const [promotionForm, setPromotionForm] = useState<PromotionForm>({
+    id: null,
+    name: "",
+    start_at: "",
+    end_at: "",
+    multiplier: "2",
+    active: true,
+  });
+
   const [productModifierMap, setProductModifierMap] = useState<Record<number, number[]>>({});
   const [paymentMethodTaxMap, setPaymentMethodTaxMap] = useState<Record<number, number[]>>({});
+
+  const activePromotion = useMemo(() => {
+    const now = Date.now();
+    return (
+      promotions.find((promo) => {
+        const start = new Date(promo.start_at).getTime();
+        const end = new Date(promo.end_at).getTime();
+        return promo.active !== false && now >= start && now <= end;
+      }) || null
+    );
+  }, [promotions]);
 
   const activeProductModifiers = useMemo(() => {
     if (!selectedProductForCart) return [];
@@ -261,15 +343,68 @@ export default function Home() {
     );
   }, [modifierLibrary, productModifierMap, selectedProductForCart]);
 
+  const linePricingPreview = useMemo(() => {
+    if (!selectedProductForCart) return 0;
+    const chosenModifiers = modifierLibrary.filter((m) =>
+      selectedModifierIds.includes(m.id)
+    );
+    const modifierTotal = chosenModifiers.reduce(
+      (sum, mod) => sum + Number(mod.price_delta),
+      0
+    );
+    const normalUnit = selectedProductForCart.price + modifierTotal;
+
+    if (linePricingMode === "complimentary") return 0;
+    if (linePricingMode === "discounted") {
+      return Math.max(0, Number(lineDiscountedUnitPrice || 0));
+    }
+    return normalUnit;
+  }, [
+    selectedProductForCart,
+    selectedModifierIds,
+    modifierLibrary,
+    linePricingMode,
+    lineDiscountedUnitPrice,
+  ]);
+
   const cartSubtotal = useMemo(() => {
     return cart.reduce((sum, item) => {
       const modifierTotal = item.modifiers.reduce(
         (modSum, mod) => modSum + Number(mod.price_delta),
         0
       );
-      return sum + (item.base_price + modifierTotal) * item.quantity;
+      const normalUnit = item.base_price + modifierTotal;
+
+      let unit = normalUnit;
+      if (item.pricing_mode === "complimentary") unit = 0;
+      if (item.pricing_mode === "discounted")
+        unit = Math.max(0, Number(item.discounted_unit_price || 0));
+
+      return sum + unit * item.quantity;
     }, 0);
   }, [cart]);
+
+  const eligibleSubtotal = useMemo(() => {
+    return cart.reduce((sum, item) => {
+      if (item.pricing_mode !== "normal") return sum;
+      const modifierTotal = item.modifiers.reduce(
+        (modSum, mod) => modSum + Number(mod.price_delta),
+        0
+      );
+      const unit = item.base_price + modifierTotal;
+      return sum + unit * item.quantity;
+    }, 0);
+  }, [cart]);
+
+  const nonEligibleSubtotal = useMemo(() => {
+    return Math.max(0, cartSubtotal - eligibleSubtotal);
+  }, [cartSubtotal, eligibleSubtotal]);
+
+  const availableRewardPoints = Number(currentCustomer?.reward_points || 0);
+  const requestedRedeemPoints = Math.max(0, Number(redeemPointsInput || 0));
+  const redeemablePoints = Math.min(availableRewardPoints, eligibleSubtotal, requestedRedeemPoints);
+
+  const taxableSubtotalAfterRedemption = Math.max(0, cartSubtotal - redeemablePoints);
 
   const selectedPaymentTaxes = useMemo(() => {
     if (!selectedPaymentMethodId) return [];
@@ -279,7 +414,7 @@ export default function Home() {
 
   const taxBreakdown = useMemo(() => {
     return selectedPaymentTaxes.map((tax) => {
-      const amount = (cartSubtotal * Number(tax.rate_percent || 0)) / 100;
+      const amount = (taxableSubtotalAfterRedemption * Number(tax.rate_percent || 0)) / 100;
       return {
         id: tax.id,
         name: tax.name,
@@ -287,13 +422,136 @@ export default function Home() {
         amount,
       };
     });
-  }, [selectedPaymentTaxes, cartSubtotal]);
+  }, [selectedPaymentTaxes, taxableSubtotalAfterRedemption]);
 
-  const cartTaxTotal = useMemo(() => {
-    return taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0);
-  }, [taxBreakdown]);
+  const cartTaxTotal = useMemo(
+    () => taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0),
+    [taxBreakdown]
+  );
 
-  const cartGrandTotal = useMemo(() => cartSubtotal + cartTaxTotal, [cartSubtotal, cartTaxTotal]);
+  const cartGrandTotal = useMemo(
+    () => taxableSubtotalAfterRedemption + cartTaxTotal,
+    [taxableSubtotalAfterRedemption, cartTaxTotal]
+  );
+
+  const currentRewardRate = useMemo(() => {
+    if (!currentCustomer) return 5;
+    return getEffectiveRewardRate(
+      Number(currentCustomer.lifetime_eligible_spend || 0),
+      Number(currentCustomer.manual_bonus_percent || 0)
+    );
+  }, [currentCustomer]);
+
+  const activePromotionMultiplier = Number(activePromotion?.multiplier || 1);
+
+  const projectedPointsEarned = useMemo(() => {
+    const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
+    return (eligiblePaidAmount * currentRewardRate * activePromotionMultiplier) / 100;
+  }, [eligibleSubtotal, redeemablePoints, currentRewardRate, activePromotionMultiplier]);
+
+  async function markReadyAndOpenWhatsApp(order: OrderView) {
+    const readyTimestamp = new Date().toISOString();
+
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        status: "Ready",
+        ready_at: readyTimestamp,
+      })
+      .eq("id", order.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
+
+    const message = `Hello${
+      order.customer?.name ? " " + order.customer.name : ""
+    }, your order ${order.order_number} is ready for pickup. Please collect it from the counter.`;
+
+    window.open(
+      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
+      "_blank"
+    );
+
+    await refreshAll();
+  }
+
+  async function sendReminder1(order: OrderView) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        reminder1_sent_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
+
+    const message = `Hello${
+      order.customer?.name ? " " + order.customer.name : ""
+    }, your order ${order.order_number} is ready and waiting for pickup at the counter. Please collect it when convenient.`;
+
+    window.open(
+      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
+      "_blank"
+    );
+
+    await refreshAll();
+  }
+
+  async function sendReminder2(order: OrderView) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        reminder2_sent_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
+
+    const message = `Hello${
+      order.customer?.name ? " " + order.customer.name : ""
+    }, this is a reminder that your order ${order.order_number} is still waiting for pickup at the counter. Please collect it as soon as possible.`;
+
+    window.open(
+      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
+      "_blank"
+    );
+
+    await refreshAll();
+  }
+
+  async function markCollected(orderId: number) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        status: "Collected",
+        collected_at: new Date().toISOString(),
+      })
+      .eq("id", orderId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await refreshAll();
+  }
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
@@ -311,13 +569,13 @@ export default function Home() {
       return;
     }
 
-    const rows: Category[] = (data || []).map((item: any) => ({
-      id: Number(item.id),
-      name: String(item.name),
-      active: item.active ?? null,
-    }));
-
-    setCategories(rows);
+    setCategories(
+      (data || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name),
+        active: item.active ?? null,
+      }))
+    );
   }
 
   async function loadModifierLibrary() {
@@ -331,14 +589,14 @@ export default function Home() {
       return;
     }
 
-    const rows: ModifierLibraryItem[] = (data || []).map((item: any) => ({
-      id: Number(item.id),
-      name: String(item.name),
-      price_delta: Number(item.price_delta || 0),
-      active: item.active ?? null,
-    }));
-
-    setModifierLibrary(rows);
+    setModifierLibrary(
+      (data || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name),
+        price_delta: Number(item.price_delta || 0),
+        active: item.active ?? null,
+      }))
+    );
   }
 
   async function loadPaymentMethods() {
@@ -395,14 +653,37 @@ export default function Home() {
       return;
     }
 
-    const rows: SalesTax[] = (data || []).map((item: any) => ({
-      id: Number(item.id),
-      name: String(item.name),
-      rate_percent: Number(item.rate_percent || 0),
-      active: item.active ?? null,
-    }));
+    setSalesTaxes(
+      (data || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name),
+        rate_percent: Number(item.rate_percent || 0),
+        active: item.active ?? null,
+      }))
+    );
+  }
 
-    setSalesTaxes(rows);
+  async function loadPromotions() {
+    const { data, error } = await supabase
+      .from("loyalty_promotions")
+      .select("*")
+      .order("start_at", { ascending: false });
+
+    if (error) {
+      setStatusMessage(`Could not load promotions: ${error.message}`);
+      return;
+    }
+
+    setPromotions(
+      (data || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name),
+        start_at: String(item.start_at),
+        end_at: String(item.end_at),
+        multiplier: Number(item.multiplier || 1),
+        active: item.active ?? null,
+      }))
+    );
   }
 
   async function loadProducts() {
@@ -495,6 +776,9 @@ export default function Home() {
           id: Number(c.id),
           name: c.name ?? null,
           phone: String(c.phone),
+          reward_points: Number(c.reward_points || 0),
+          lifetime_eligible_spend: Number(c.lifetime_eligible_spend || 0),
+          manual_bonus_percent: Number(c.manual_bonus_percent || 0),
         });
       });
     }
@@ -538,6 +822,13 @@ export default function Home() {
       total: Number(order.total || 0),
       subtotal: Number(order.subtotal || 0),
       tax_total: Number(order.tax_total || 0),
+      discount_total: Number(order.discount_total || 0),
+      points_earned: Number(order.points_earned || 0),
+      points_redeemed: Number(order.points_redeemed || 0),
+      eligible_subtotal: Number(order.eligible_subtotal || 0),
+      non_eligible_subtotal: Number(order.non_eligible_subtotal || 0),
+      effective_reward_percent: Number(order.effective_reward_percent || 0),
+      reward_multiplier: Number(order.reward_multiplier || 1),
       created_at: String(order.created_at),
       ready_at: order.ready_at ?? null,
       reminder1_sent_at: order.reminder1_sent_at ?? null,
@@ -571,8 +862,7 @@ export default function Home() {
       return;
     }
 
-    const merged = await buildOrdersWithRelations(data || []);
-    setActiveOrders(merged);
+    setActiveOrders(await buildOrdersWithRelations(data || []));
   }
 
   async function loadCompletedOrders() {
@@ -588,8 +878,7 @@ export default function Home() {
       return;
     }
 
-    const merged = await buildOrdersWithRelations(data || []);
-    setCompletedOrders(merged);
+    setCompletedOrders(await buildOrdersWithRelations(data || []));
   }
 
   async function loadReportData() {
@@ -657,17 +946,87 @@ export default function Home() {
     );
   }
 
+  async function lookupCustomerByPhone(phone: string) {
+    const normalizedPhone = normalizePhoneForStorage(phone);
+    if (!normalizedPhone) {
+      setCurrentCustomer(null);
+      setCustomerRecentOrders([]);
+      setCustomerPointsLedger([]);
+      setManualBonusInput("");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("customers")
+      .select("*")
+      .eq("phone", normalizedPhone)
+      .order("id", { ascending: false })
+      .limit(1);
+
+    if (error || !data || data.length === 0) {
+      setCurrentCustomer(null);
+      setCustomerRecentOrders([]);
+      setCustomerPointsLedger([]);
+      setManualBonusInput("");
+      return;
+    }
+
+    const customer: CustomerRow = {
+      id: Number(data[0].id),
+      name: data[0].name ?? null,
+      phone: String(data[0].phone),
+      reward_points: Number(data[0].reward_points || 0),
+      lifetime_eligible_spend: Number(data[0].lifetime_eligible_spend || 0),
+      manual_bonus_percent: Number(data[0].manual_bonus_percent || 0),
+    };
+
+    setCurrentCustomer(customer);
+    setManualBonusInput(String(customer.manual_bonus_percent || 0));
+
+    const { data: orderRows } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("customer_id", customer.id)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    setCustomerRecentOrders(await buildOrdersWithRelations(orderRows || []));
+
+    const { data: ledgerRows } = await supabase
+      .from("customer_points_ledger")
+      .select("*")
+      .eq("customer_id", customer.id)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    setCustomerPointsLedger(
+      (ledgerRows || []).map((row: any) => ({
+        id: Number(row.id),
+        entry_type: String(row.entry_type),
+        points: Number(row.points || 0),
+        note: row.note ?? null,
+        created_at: String(row.created_at),
+      }))
+    );
+  }
+
   async function refreshAll() {
     await Promise.all([
       loadCategories(),
       loadModifierLibrary(),
       loadSalesTaxes(),
       loadPaymentMethods(),
+      loadPromotions(),
       loadReportData(),
       loadActiveOrders(),
       loadCompletedOrders(),
     ]);
     await loadProducts();
+
+    if (customerPhone.trim()) {
+      await lookupCustomerByPhone(customerPhone);
+    }
+
     setStatusMessage("Ready");
   }
 
@@ -675,10 +1034,20 @@ export default function Home() {
     refreshAll();
   }, [categories.length]);
 
+  useEffect(() => {
+    const t = setTimeout(() => {
+      lookupCustomerByPhone(customerPhone);
+    }, 300);
+
+    return () => clearTimeout(t);
+  }, [customerPhone]);
+
   function openProductConfigurator(product: Product) {
     setSelectedProductForCart(product);
     setSelectedModifierIds([]);
     setLineNotes("");
+    setLinePricingMode("normal");
+    setLineDiscountedUnitPrice("");
   }
 
   function toggleModifier(modifierId: number) {
@@ -733,12 +1102,19 @@ export default function Home() {
         quantity: 1,
         modifiers: chosenModifiers,
         notes: lineNotes.trim(),
+        pricing_mode: linePricingMode,
+        discounted_unit_price:
+          linePricingMode === "discounted"
+            ? Math.max(0, Number(lineDiscountedUnitPrice || 0))
+            : null,
       },
     ]);
 
     setSelectedProductForCart(null);
     setSelectedModifierIds([]);
     setLineNotes("");
+    setLinePricingMode("normal");
+    setLineDiscountedUnitPrice("");
   }
 
   function increaseQty(lineId: string) {
@@ -757,6 +1133,24 @@ export default function Home() {
         )
         .filter((item) => item.quantity > 0)
     );
+  }
+
+  async function saveCustomerManualBonus() {
+    if (!currentCustomer) return;
+
+    const newBonus = Math.max(0, Number(manualBonusInput || 0));
+
+    const { error } = await supabase
+      .from("customers")
+      .update({ manual_bonus_percent: newBonus })
+      .eq("id", currentCustomer.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await lookupCustomerByPhone(currentCustomer.phone);
   }
 
   async function createOrder() {
@@ -781,6 +1175,7 @@ export default function Home() {
 
     try {
       let customerId: number | null = null;
+      let customerSnapshot: CustomerRow | null = null;
 
       const { data: existingCustomers, error: existingCustomerError } = await supabase
         .from("customers")
@@ -796,11 +1191,21 @@ export default function Home() {
 
       if (existingCustomers && existingCustomers.length > 0) {
         customerId = Number(existingCustomers[0].id);
+        customerSnapshot = {
+          id: Number(existingCustomers[0].id),
+          name: existingCustomers[0].name ?? null,
+          phone: String(existingCustomers[0].phone),
+          reward_points: Number(existingCustomers[0].reward_points || 0),
+          lifetime_eligible_spend: Number(existingCustomers[0].lifetime_eligible_spend || 0),
+          manual_bonus_percent: Number(existingCustomers[0].manual_bonus_percent || 0),
+        };
+
         if (customerName.trim()) {
           await supabase
             .from("customers")
             .update({ name: customerName.trim() })
             .eq("id", customerId);
+          customerSnapshot.name = customerName.trim();
         }
       } else {
         const { data: customerData, error: customerError } = await supabase
@@ -818,7 +1223,26 @@ export default function Home() {
         }
 
         customerId = Number(customerData.id);
+        customerSnapshot = {
+          id: Number(customerData.id),
+          name: customerData.name ?? null,
+          phone: String(customerData.phone),
+          reward_points: Number(customerData.reward_points || 0),
+          lifetime_eligible_spend: Number(customerData.lifetime_eligible_spend || 0),
+          manual_bonus_percent: Number(customerData.manual_bonus_percent || 0),
+        };
       }
+
+      if (!customerId || !customerSnapshot) return;
+
+      const rewardRate = getEffectiveRewardRate(
+        customerSnapshot.lifetime_eligible_spend,
+        customerSnapshot.manual_bonus_percent
+      );
+      const multiplier = Number(activePromotion?.multiplier || 1);
+
+      const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
+      const pointsEarned = (eligiblePaidAmount * rewardRate * multiplier) / 100;
 
       const { data: orderData, error: orderError } = await supabase
         .from("orders")
@@ -830,6 +1254,14 @@ export default function Home() {
           subtotal: cartSubtotal,
           tax_total: cartTaxTotal,
           total: cartGrandTotal,
+          discount_total: redeemablePoints,
+          points_earned: pointsEarned,
+          points_redeemed: redeemablePoints,
+          eligible_subtotal: eligibleSubtotal,
+          non_eligible_subtotal: nonEligibleSubtotal,
+          effective_reward_percent: rewardRate,
+          reward_multiplier: multiplier,
+          loyalty_promotion_id: activePromotion?.id || null,
         })
         .select()
         .single();
@@ -856,7 +1288,18 @@ export default function Home() {
           (sum, mod) => sum + Number(mod.price_delta),
           0
         );
-        const unitPrice = item.base_price + modifierTotal;
+        const normalUnit = item.base_price + modifierTotal;
+
+        let unitPrice = normalUnit;
+        if (item.pricing_mode === "complimentary") unitPrice = 0;
+        if (item.pricing_mode === "discounted") {
+          unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
+        }
+
+        const tags: string[] = [];
+        if (item.pricing_mode === "discounted") tags.push("Discounted item");
+        if (item.pricing_mode === "complimentary") tags.push("Complimentary item");
+        if (item.notes) tags.push(item.notes);
 
         return {
           order_id: orderData.id,
@@ -875,7 +1318,7 @@ export default function Home() {
                   )
                   .join(", ")
               : null,
-          notes: item.notes || null,
+          notes: tags.length > 0 ? tags.join(" | ") : null,
         };
       });
 
@@ -888,9 +1331,52 @@ export default function Home() {
         return;
       }
 
+      const newRewardBalance =
+        Number(customerSnapshot.reward_points || 0) - redeemablePoints + pointsEarned;
+      const newLifetimeSpend =
+        Number(customerSnapshot.lifetime_eligible_spend || 0) + eligiblePaidAmount;
+
+      const { error: updateCustomerError } = await supabase
+        .from("customers")
+        .update({
+          reward_points: newRewardBalance,
+          lifetime_eligible_spend: newLifetimeSpend,
+        })
+        .eq("id", customerId);
+
+      if (updateCustomerError) {
+        alert(updateCustomerError.message);
+        return;
+      }
+
+      if (redeemablePoints > 0) {
+        await supabase.from("customer_points_ledger").insert({
+          customer_id: customerId,
+          order_id: orderData.id,
+          entry_type: "redeemed",
+          points: -redeemablePoints,
+          note: `Redeemed on order ${shortOrderNumber}`,
+        });
+      }
+
+      if (pointsEarned > 0) {
+        await supabase.from("customer_points_ledger").insert({
+          customer_id: customerId,
+          order_id: orderData.id,
+          entry_type: "earned",
+          points: pointsEarned,
+          note: `Earned on order ${shortOrderNumber}`,
+        });
+      }
+
       setCart([]);
       setCustomerName("");
       setCustomerPhone("");
+      setRedeemPointsInput("0");
+      setCurrentCustomer(null);
+      setCustomerRecentOrders([]);
+      setCustomerPointsLedger([]);
+      setManualBonusInput("");
       setStatusMessage(`Order ${shortOrderNumber} created successfully.`);
       await refreshAll();
     } finally {
@@ -1140,6 +1626,67 @@ export default function Home() {
     await refreshAll();
   }
 
+  async function savePromotion() {
+    if (!promotionForm.name.trim() || !promotionForm.start_at || !promotionForm.end_at) {
+      alert("Please fill promotion name, start, and end.");
+      return;
+    }
+
+    const payload = {
+      name: promotionForm.name.trim(),
+      start_at: new Date(promotionForm.start_at).toISOString(),
+      end_at: new Date(promotionForm.end_at).toISOString(),
+      multiplier: Number(promotionForm.multiplier || 1),
+      active: promotionForm.active,
+    };
+
+    if (promotionForm.id) {
+      const { error } = await supabase
+        .from("loyalty_promotions")
+        .update(payload)
+        .eq("id", promotionForm.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("loyalty_promotions").insert(payload);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setPromotionForm({
+      id: null,
+      name: "",
+      start_at: "",
+      end_at: "",
+      multiplier: "2",
+      active: true,
+    });
+
+    await refreshAll();
+  }
+
+  async function deletePromotion(promotionId: number) {
+    if (!window.confirm("Delete this promotion?")) return;
+
+    const { error } = await supabase
+      .from("loyalty_promotions")
+      .delete()
+      .eq("id", promotionId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await refreshAll();
+  }
+
   async function saveProduct() {
     if (!productForm.name.trim() || !productForm.price.trim()) {
       alert("Please enter product name and price.");
@@ -1230,103 +1777,6 @@ export default function Home() {
     await refreshAll();
   }
 
-  async function markReadyAndOpenWhatsApp(order: OrderView) {
-    const readyTimestamp = new Date().toISOString();
-
-    const { error } = await supabase
-      .from("orders")
-      .update({
-        status: "Ready",
-        ready_at: readyTimestamp,
-      })
-      .eq("id", order.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    const phone = order.customer?.phone || "";
-    const normalizedPhone = normalizePhoneForWhatsApp(phone);
-
-    const message = `Hello${
-      order.customer?.name ? " " + order.customer.name : ""
-    }, your order ${order.order_number} is ready for pickup. Please collect it from the counter.`;
-
-    window.open(
-      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
-      "_blank"
-    );
-    await refreshAll();
-  }
-
-  async function sendReminder1(order: OrderView) {
-    const { error } = await supabase
-      .from("orders")
-      .update({ reminder1_sent_at: new Date().toISOString() })
-      .eq("id", order.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    const phone = order.customer?.phone || "";
-    const normalizedPhone = normalizePhoneForWhatsApp(phone);
-
-    const message = `Hello${
-      order.customer?.name ? " " + order.customer.name : ""
-    }, your order ${order.order_number} is ready and waiting for pickup at the counter. Please collect it when convenient.`;
-
-    window.open(
-      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
-      "_blank"
-    );
-    await refreshAll();
-  }
-
-  async function sendReminder2(order: OrderView) {
-    const { error } = await supabase
-      .from("orders")
-      .update({ reminder2_sent_at: new Date().toISOString() })
-      .eq("id", order.id);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    const phone = order.customer?.phone || "";
-    const normalizedPhone = normalizePhoneForWhatsApp(phone);
-
-    const message = `Hello${
-      order.customer?.name ? " " + order.customer.name : ""
-    }, this is a reminder that your order ${order.order_number} is still waiting for pickup at the counter. Please collect it as soon as possible.`;
-
-    window.open(
-      `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message)}`,
-      "_blank"
-    );
-    await refreshAll();
-  }
-
-  async function markCollected(orderId: number) {
-    const { error } = await supabase
-      .from("orders")
-      .update({
-        status: "Collected",
-        collected_at: new Date().toISOString(),
-      })
-      .eq("id", orderId);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    await refreshAll();
-  }
-
   function renderOrderCard(order: OrderView, isCompleted = false) {
     const elapsedSeconds =
       order.status === "Ready" && order.ready_at
@@ -1372,9 +1822,18 @@ export default function Home() {
             Subtotal: {formatCurrency(order.subtotal)}
           </div>
           <div className="text-sm text-slate-600">
+            Discount: {formatCurrency(order.discount_total)}
+          </div>
+          <div className="text-sm text-slate-600">
             Tax: {formatCurrency(order.tax_total)}
           </div>
           <div className="mt-1 font-semibold">{formatCurrency(order.total)}</div>
+
+          <div className="mt-2 text-xs text-slate-600">
+            Points redeemed: {order.points_redeemed.toFixed(0)} | Points earned:{" "}
+            {order.points_earned.toFixed(0)} | Rate: {order.effective_reward_percent}% x{" "}
+            {order.reward_multiplier}
+          </div>
 
           <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
             <div className="font-medium">
@@ -1477,7 +1936,7 @@ export default function Home() {
           <div>
             <h1 className="text-3xl font-bold">Cafe POS</h1>
             <p className="text-slate-600">
-              Payment methods, taxes, categories, modifiers, history, and reports
+              Customer history, loyalty points, promotions, payments, taxes, setup
             </p>
           </div>
 
@@ -1508,9 +1967,9 @@ export default function Home() {
               POS
             </button>
             <button
-              onClick={() => setViewMode("products")}
+              onClick={() => setViewMode("setup")}
               className={`rounded-xl px-4 py-2 font-medium ${
-                viewMode === "products" ? "bg-black text-white" : "border bg-white"
+                viewMode === "setup" ? "bg-black text-white" : "border bg-white"
               }`}
             >
               Setup
@@ -1537,7 +1996,7 @@ export default function Home() {
         </div>
 
         {viewMode === "pos" && (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.9fr_1fr]">
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr_1fr_0.9fr]">
             <section className="rounded-2xl bg-white p-5 shadow-sm">
               <h2 className="mb-4 text-2xl font-semibold">Menu</h2>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1578,6 +2037,8 @@ export default function Home() {
                         setSelectedProductForCart(null);
                         setSelectedModifierIds([]);
                         setLineNotes("");
+                        setLinePricingMode("normal");
+                        setLineDiscountedUnitPrice("");
                       }}
                       className="rounded-lg border px-3 py-1"
                     >
@@ -1615,6 +2076,50 @@ export default function Home() {
                     )}
                   </div>
 
+                  <div className="mt-4 rounded-xl border p-3 bg-white">
+                    <div className="mb-2 font-medium">Line Pricing Type</div>
+                    <div className="flex flex-col gap-2">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={linePricingMode === "normal"}
+                          onChange={() => setLinePricingMode("normal")}
+                        />
+                        <span>Normal - eligible for points</span>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={linePricingMode === "discounted"}
+                          onChange={() => setLinePricingMode("discounted")}
+                        />
+                        <span>Discounted - not eligible for points</span>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={linePricingMode === "complimentary"}
+                          onChange={() => setLinePricingMode("complimentary")}
+                        />
+                        <span>Complimentary - not eligible for points</span>
+                      </label>
+                    </div>
+
+                    {linePricingMode === "discounted" && (
+                      <div className="mt-3">
+                        <label className="mb-1 block text-sm font-medium">
+                          Discounted Unit Price
+                        </label>
+                        <input
+                          value={lineDiscountedUnitPrice}
+                          onChange={(e) => setLineDiscountedUnitPrice(e.target.value)}
+                          className="w-full rounded-xl border px-3 py-2"
+                          placeholder="Enter discounted price"
+                        />
+                      </div>
+                    )}
+                  </div>
+
                   <div className="mt-4">
                     <label className="mb-1 block text-sm font-medium">
                       Special Instructions
@@ -1625,6 +2130,10 @@ export default function Home() {
                       className="min-h-24 w-full rounded-xl border px-3 py-2"
                       placeholder="Examples: more ice, no sugar, allergy"
                     />
+                  </div>
+
+                  <div className="mt-3 text-sm text-slate-600">
+                    Unit price preview: {formatCurrency(linePricingPreview)}
                   </div>
 
                   <button
@@ -1699,7 +2208,13 @@ export default function Home() {
                       (sum, mod) => sum + Number(mod.price_delta),
                       0
                     );
-                    const unitPrice = item.base_price + modifierTotal;
+                    const normalUnit = item.base_price + modifierTotal;
+
+                    let unitPrice = normalUnit;
+                    if (item.pricing_mode === "complimentary") unitPrice = 0;
+                    if (item.pricing_mode === "discounted") {
+                      unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
+                    }
 
                     return (
                       <div key={item.line_id} className="rounded-xl border p-3">
@@ -1708,6 +2223,10 @@ export default function Home() {
                             <div className="font-medium">{item.name}</div>
                             <div className="text-sm text-slate-500">
                               {formatCurrency(unitPrice)} each
+                            </div>
+
+                            <div className="mt-1 text-xs text-slate-600">
+                              Type: {item.pricing_mode}
                             </div>
 
                             {item.modifiers.length > 0 && (
@@ -1758,8 +2277,20 @@ export default function Home() {
 
               <div className="mt-5 rounded-xl border bg-slate-50 p-4 space-y-2">
                 <div className="flex items-center justify-between">
+                  <span className="font-medium">Eligible Subtotal</span>
+                  <span>{formatCurrency(eligibleSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Non-Eligible Subtotal</span>
+                  <span>{formatCurrency(nonEligibleSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
                   <span className="font-medium">Subtotal</span>
                   <span>{formatCurrency(cartSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Points Redemption</span>
+                  <span>- {formatCurrency(redeemablePoints)}</span>
                 </div>
 
                 {taxBreakdown.map((tax) => (
@@ -1785,6 +2316,14 @@ export default function Home() {
                     {formatCurrency(cartGrandTotal)}
                   </span>
                 </div>
+
+                <div className="pt-2 text-sm text-slate-600">
+                  Reward rate: {currentRewardRate}%{" "}
+                  {activePromotion ? `x ${activePromotionMultiplier} (${activePromotion.name})` : ""}
+                </div>
+                <div className="text-sm text-slate-600">
+                  Projected points earned: {projectedPointsEarned.toFixed(0)}
+                </div>
               </div>
 
               <button
@@ -1806,10 +2345,128 @@ export default function Home() {
                 )}
               </div>
             </section>
+
+            <section className="rounded-2xl bg-white p-5 shadow-sm">
+              <h2 className="mb-4 text-2xl font-semibold">Customer Panel</h2>
+
+              {!currentCustomer ? (
+                <p className="text-slate-500">
+                  Enter a phone number to load customer history and points.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-xl border bg-slate-50 p-3">
+                    <div className="font-semibold">{currentCustomer.name || "Guest"}</div>
+                    <div className="text-sm text-slate-600">{currentCustomer.phone}</div>
+                    <div className="mt-2 text-sm">
+                      Points: <strong>{currentCustomer.reward_points.toFixed(0)}</strong>
+                    </div>
+                    <div className="text-sm">
+                      Lifetime eligible spend:{" "}
+                      <strong>{formatCurrency(currentCustomer.lifetime_eligible_spend)}</strong>
+                    </div>
+                    <div className="text-sm">
+                      Tier rate:{" "}
+                      <strong>
+                        {getTierRateFromSpend(currentCustomer.lifetime_eligible_spend)}%
+                      </strong>
+                    </div>
+                    <div className="text-sm">
+                      Manual bonus: <strong>{currentCustomer.manual_bonus_percent}%</strong>
+                    </div>
+                    <div className="text-sm">
+                      Effective rate: <strong>{currentRewardRate}%</strong>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="mb-2 font-medium">Redeem Points</div>
+                    <input
+                      value={redeemPointsInput}
+                      onChange={(e) => setRedeemPointsInput(e.target.value)}
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="Enter points to redeem"
+                    />
+                    <div className="mt-2 text-xs text-slate-600">
+                      Max redeemable now: {Math.min(currentCustomer.reward_points, eligibleSubtotal).toFixed(0)}
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      Cannot redeem on discounted or complimentary items.
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="mb-2 font-medium">Manual Bonus %</div>
+                    <div className="flex gap-2">
+                      <input
+                        value={manualBonusInput}
+                        onChange={(e) => setManualBonusInput(e.target.value)}
+                        className="flex-1 rounded-xl border px-3 py-2"
+                        placeholder="Extra percentage"
+                      />
+                      <button
+                        onClick={saveCustomerManualBonus}
+                        className="rounded-xl bg-black px-4 py-2 font-medium text-white"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="mb-2 font-medium">Recent Orders</div>
+                    <div className="space-y-2">
+                      {customerRecentOrders.length === 0 ? (
+                        <div className="text-sm text-slate-500">No recent orders.</div>
+                      ) : (
+                        customerRecentOrders.map((order) => (
+                          <div key={order.id} className="rounded-lg border bg-slate-50 p-2">
+                            <div className="font-medium">{order.order_number}</div>
+                            <div className="text-xs text-slate-600">
+                              {formatTime(order.created_at)}
+                            </div>
+                            <div className="text-xs text-slate-600">
+                              {order.payment_method_name || "-"} | {formatCurrency(order.total)}
+                            </div>
+                            <div className="text-xs text-slate-600">
+                              Earned {order.points_earned.toFixed(0)} | Redeemed {order.points_redeemed.toFixed(0)}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="mb-2 font-medium">Points Ledger</div>
+                    <div className="space-y-2">
+                      {customerPointsLedger.length === 0 ? (
+                        <div className="text-sm text-slate-500">No points history yet.</div>
+                      ) : (
+                        customerPointsLedger.map((entry) => (
+                          <div key={entry.id} className="rounded-lg border bg-slate-50 p-2">
+                            <div className="text-sm font-medium">
+                              {entry.entry_type} {entry.points > 0 ? "+" : ""}
+                              {entry.points.toFixed(0)}
+                            </div>
+                            <div className="text-xs text-slate-600">
+                              {entry.note || "-"}
+                            </div>
+                            <div className="text-xs text-slate-600">
+                              {formatTime(entry.created_at)}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         )}
 
-        {viewMode === "products" && (
+        {viewMode === "setup" && (
           <div className="grid gap-6 lg:grid-cols-2">
             <section className="space-y-6">
               <div className="rounded-2xl bg-white p-5 shadow-sm">
@@ -2058,7 +2715,9 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+            </section>
 
+            <section className="space-y-6">
               <div className="rounded-2xl bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Payment Methods</h2>
                 <div className="space-y-3">
@@ -2138,10 +2797,7 @@ export default function Home() {
                     );
 
                     return (
-                      <div
-                        key={pm.id}
-                        className="rounded-lg border px-3 py-2"
-                      >
+                      <div key={pm.id} className="rounded-lg border px-3 py-2">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div>{pm.name}</div>
@@ -2179,99 +2835,78 @@ export default function Home() {
                   })}
                 </div>
               </div>
-            </section>
 
-            <section className="space-y-6">
               <div className="rounded-2xl bg-white p-5 shadow-sm">
-                <h2 className="mb-4 text-2xl font-semibold">Add / Edit Product</h2>
-
+                <h2 className="mb-4 text-2xl font-semibold">Loyalty Promotions</h2>
                 <div className="space-y-3">
                   <input
-                    value={productForm.name}
+                    value={promotionForm.name}
                     onChange={(e) =>
-                      setProductForm({ ...productForm, name: e.target.value })
+                      setPromotionForm({ ...promotionForm, name: e.target.value })
                     }
                     className="w-full rounded-xl border px-3 py-2"
-                    placeholder="Product name"
+                    placeholder="Promotion name"
                   />
-
-                  <input
-                    value={productForm.price}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm font-medium">Start</label>
+                      <input
+                        type="datetime-local"
+                        value={promotionForm.start_at}
+                        onChange={(e) =>
+                          setPromotionForm({ ...promotionForm, start_at: e.target.value })
+                        }
+                        className="w-full rounded-xl border px-3 py-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm font-medium">End</label>
+                      <input
+                        type="datetime-local"
+                        value={promotionForm.end_at}
+                        onChange={(e) =>
+                          setPromotionForm({ ...promotionForm, end_at: e.target.value })
+                        }
+                        className="w-full rounded-xl border px-3 py-2"
+                      />
+                    </div>
+                  </div>
+                  <select
+                    value={promotionForm.multiplier}
                     onChange={(e) =>
-                      setProductForm({ ...productForm, price: e.target.value })
+                      setPromotionForm({ ...promotionForm, multiplier: e.target.value })
                     }
                     className="w-full rounded-xl border px-3 py-2"
-                    placeholder="Price"
-                  />
-
+                  >
+                    <option value="2">2x points</option>
+                    <option value="3">3x points</option>
+                  </select>
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
-                      checked={productForm.active}
+                      checked={promotionForm.active}
                       onChange={(e) =>
-                        setProductForm({ ...productForm, active: e.target.checked })
+                        setPromotionForm({ ...promotionForm, active: e.target.checked })
                       }
                     />
                     <span>Active</span>
                   </label>
-
-                  <div className="rounded-xl border p-3">
-                    <div className="mb-2 font-medium">Categories</div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {categories
-                        .filter((category) => category.active !== false)
-                        .map((category) => (
-                          <label key={category.id} className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={productForm.categoryIds.includes(category.id)}
-                              onChange={() => toggleProductCategory(category.id)}
-                            />
-                            <span>{category.name}</span>
-                          </label>
-                        ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border p-3">
-                    <div className="mb-2 font-medium">Allowed Modifiers</div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {modifierLibrary
-                        .filter((modifier) => modifier.active !== false)
-                        .map((modifier) => (
-                          <label key={modifier.id} className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={productForm.modifierIds.includes(modifier.id)}
-                              onChange={() => toggleProductModifier(modifier.id)}
-                            />
-                            <span>
-                              {modifier.name}{" "}
-                              {Number(modifier.price_delta) === 0
-                                ? "(Free)"
-                                : `(+${formatCurrency(Number(modifier.price_delta))})`}
-                            </span>
-                          </label>
-                        ))}
-                    </div>
-                  </div>
-
                   <div className="flex gap-2">
                     <button
-                      onClick={saveProduct}
+                      onClick={savePromotion}
                       className="rounded-xl bg-black px-4 py-2 font-medium text-white"
                     >
-                      {productForm.id ? "Update Product" : "Add Product"}
+                      {promotionForm.id ? "Update Promotion" : "Add Promotion"}
                     </button>
                     <button
                       onClick={() =>
-                        setProductForm({
+                        setPromotionForm({
                           id: null,
                           name: "",
-                          price: "",
+                          start_at: "",
+                          end_at: "",
+                          multiplier: "2",
                           active: true,
-                          categoryIds: [],
-                          modifierIds: [],
                         })
                       }
                       className="rounded-xl border px-4 py-2"
@@ -2280,72 +2915,210 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
+
+                <div className="mt-4 space-y-2">
+                  {promotions.map((promo) => (
+                    <div key={promo.id} className="rounded-lg border px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div>
+                            {promo.name} | {promo.multiplier}x
+                          </div>
+                          <div className="text-xs text-slate-600">
+                            {formatTime(promo.start_at)} to {formatTime(promo.end_at)}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() =>
+                              setPromotionForm({
+                                id: promo.id,
+                                name: promo.name,
+                                start_at: promo.start_at.slice(0, 16),
+                                end_at: promo.end_at.slice(0, 16),
+                                multiplier: String(promo.multiplier),
+                                active: promo.active !== false,
+                              })
+                            }
+                            className="rounded-lg border px-3 py-1"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deletePromotion(promo.id)}
+                            className="rounded-lg border px-3 py-1"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {activePromotion && (
+                  <div className="mt-4 rounded-xl border border-green-300 bg-green-50 p-3 text-sm">
+                    Active promotion: <strong>{activePromotion.name}</strong> ({activePromotion.multiplier}x)
+                  </div>
+                )}
               </div>
 
               <div className="rounded-2xl bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Products</h2>
 
                 <div className="space-y-3">
-                  {products.length === 0 ? (
-                    <p className="text-slate-500">No products found.</p>
-                  ) : (
-                    products.map((product) => {
-                      const allowedModifierIds = productModifierMap[product.id] || [];
-                      const allowedModifiers = modifierLibrary.filter((m) =>
-                        allowedModifierIds.includes(m.id)
-                      );
+                  <div className="space-y-3 rounded-xl border p-4">
+                    <input
+                      value={productForm.name}
+                      onChange={(e) =>
+                        setProductForm({ ...productForm, name: e.target.value })
+                      }
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="Product name"
+                    />
 
-                      return (
-                        <div key={product.id} className="rounded-xl border p-4">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                              <div className="font-semibold">{product.name}</div>
-                              <div className="text-sm text-slate-500">
-                                {formatCurrency(product.price)} |{" "}
-                                {product.active === false ? "Inactive" : "Active"}
-                              </div>
-                              <div className="mt-1 text-xs text-slate-600">
-                                Categories:{" "}
-                                {product.categories.length > 0
-                                  ? product.categories.map((c) => c.name).join(", ")
-                                  : "-"}
-                              </div>
-                              <div className="mt-1 text-xs text-slate-600">
-                                Modifiers:{" "}
-                                {allowedModifiers.length > 0
-                                  ? allowedModifiers.map((m) => m.name).join(", ")
-                                  : "-"}
-                              </div>
+                    <input
+                      value={productForm.price}
+                      onChange={(e) =>
+                        setProductForm({ ...productForm, price: e.target.value })
+                      }
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="Price"
+                    />
+
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={productForm.active}
+                        onChange={(e) =>
+                          setProductForm({ ...productForm, active: e.target.checked })
+                        }
+                      />
+                      <span>Active</span>
+                    </label>
+
+                    <div className="rounded-xl border p-3">
+                      <div className="mb-2 font-medium">Categories</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {categories
+                          .filter((category) => category.active !== false)
+                          .map((category) => (
+                            <label key={category.id} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={productForm.categoryIds.includes(category.id)}
+                                onChange={() => toggleProductCategory(category.id)}
+                              />
+                              <span>{category.name}</span>
+                            </label>
+                          ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border p-3">
+                      <div className="mb-2 font-medium">Allowed Modifiers</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {modifierLibrary
+                          .filter((modifier) => modifier.active !== false)
+                          .map((modifier) => (
+                            <label key={modifier.id} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={productForm.modifierIds.includes(modifier.id)}
+                                onChange={() => toggleProductModifier(modifier.id)}
+                              />
+                              <span>
+                                {modifier.name}{" "}
+                                {Number(modifier.price_delta) === 0
+                                  ? "(Free)"
+                                  : `(+${formatCurrency(Number(modifier.price_delta))})`}
+                              </span>
+                            </label>
+                          ))}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveProduct}
+                        className="rounded-xl bg-black px-4 py-2 font-medium text-white"
+                      >
+                        {productForm.id ? "Update Product" : "Add Product"}
+                      </button>
+                      <button
+                        onClick={() =>
+                          setProductForm({
+                            id: null,
+                            name: "",
+                            price: "",
+                            active: true,
+                            categoryIds: [],
+                            modifierIds: [],
+                          })
+                        }
+                        className="rounded-xl border px-4 py-2"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+
+                  {products.map((product) => {
+                    const allowedModifierIds = productModifierMap[product.id] || [];
+                    const allowedModifiers = modifierLibrary.filter((m) =>
+                      allowedModifierIds.includes(m.id)
+                    );
+
+                    return (
+                      <div key={product.id} className="rounded-xl border p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <div className="font-semibold">{product.name}</div>
+                            <div className="text-sm text-slate-500">
+                              {formatCurrency(product.price)} |{" "}
+                              {product.active === false ? "Inactive" : "Active"}
                             </div>
-
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() =>
-                                  setProductForm({
-                                    id: product.id,
-                                    name: product.name,
-                                    price: String(product.price),
-                                    active: product.active !== false,
-                                    categoryIds: product.categories.map((c) => c.id),
-                                    modifierIds: allowedModifierIds,
-                                  })
-                                }
-                                className="rounded-xl border px-4 py-2"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => deleteProduct(product.id)}
-                                className="rounded-xl border px-4 py-2"
-                              >
-                                Delete
-                              </button>
+                            <div className="mt-1 text-xs text-slate-600">
+                              Categories:{" "}
+                              {product.categories.length > 0
+                                ? product.categories.map((c) => c.name).join(", ")
+                                : "-"}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              Modifiers:{" "}
+                              {allowedModifiers.length > 0
+                                ? allowedModifiers.map((m) => m.name).join(", ")
+                                : "-"}
                             </div>
                           </div>
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() =>
+                                setProductForm({
+                                  id: product.id,
+                                  name: product.name,
+                                  price: String(product.price),
+                                  active: product.active !== false,
+                                  categoryIds: product.categories.map((c) => c.id),
+                                  modifierIds: allowedModifierIds,
+                                })
+                              }
+                              className="rounded-xl border px-4 py-2"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => deleteProduct(product.id)}
+                              className="rounded-xl border px-4 py-2"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
-                      );
-                    })
-                  )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </section>
