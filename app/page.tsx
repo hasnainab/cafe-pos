@@ -7,7 +7,7 @@ type Product = {
   id: number;
   name: string;
   category: string | null;
-  price: number | string;
+  price: number;
   active: boolean | null;
 };
 
@@ -18,20 +18,21 @@ type CartItem = {
   quantity: number;
 };
 
-type OrderRow = {
-  id: number;
-  order_number: string;
-  status: string;
-  total: number | string;
-  created_at: string;
-  ready_at: string | null;
-  customer_id: number | null;
-};
-
 type CustomerRow = {
   id: number;
   name: string | null;
   phone: string;
+};
+
+type ActiveOrder = {
+  id: number;
+  order_number: string;
+  status: string;
+  total: number;
+  created_at: string;
+  ready_at: string | null;
+  customer_id: number | null;
+  customer: CustomerRow | null;
 };
 
 function formatCurrency(value: number) {
@@ -67,9 +68,7 @@ export default function Home() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
-  const [activeOrders, setActiveOrders] = useState<
-    (OrderRow & { customer: CustomerRow | null })[]
-  >([]);
+  const [activeOrders, setActiveOrders] = useState<ActiveOrder[]>([]);
   const [todaySales, setTodaySales] = useState(0);
   const [todayOrders, setTodayOrders] = useState(0);
   const [statusMessage, setStatusMessage] = useState("Loading...");
@@ -91,7 +90,15 @@ export default function Home() {
       return;
     }
 
-    setProducts(data || []);
+    const safeProducts: Product[] = (data || []).map((item: any) => ({
+      id: Number(item.id),
+      name: String(item.name),
+      category: item.category ?? null,
+      price: Number(item.price),
+      active: item.active ?? null,
+    }));
+
+    setProducts(safeProducts);
     setStatusMessage("Ready");
   }
 
@@ -107,28 +114,46 @@ export default function Home() {
       return;
     }
 
-    const orders = ordersData || [];
+    const rawOrders: any[] = ordersData || [];
 
-    const customerIds = orders
+    const customerIds = rawOrders
       .map((o) => o.customer_id)
-      .filter((id): id is number => !!id);
+      .filter((id) => id !== null && id !== undefined);
 
-    let customerMap = new Map<number, CustomerRow>();
+    const customerMap = new Map<number, CustomerRow>();
 
     if (customerIds.length > 0) {
-      const { data: customersData } = await supabase
+      const { data: customersData, error: customersError } = await supabase
         .from("customers")
         .select("*")
         .in("id", customerIds);
 
-      (customersData || []).forEach((c) => {
-        customerMap.set(c.id, c);
-      });
+      if (!customersError) {
+        (customersData || []).forEach((c: any) => {
+          customerMap.set(Number(c.id), {
+            id: Number(c.id),
+            name: c.name ?? null,
+            phone: String(c.phone),
+          });
+        });
+      }
     }
 
-    const merged = orders.map((order) => ({
-      ...order,
-      customer: order.customer_id ? customerMap.get(order.customer_id) || null : null,
+    const merged: ActiveOrder[] = rawOrders.map((order: any) => ({
+      id: Number(order.id),
+      order_number: String(order.order_number),
+      status: String(order.status),
+      total: Number(order.total || 0),
+      created_at: String(order.created_at),
+      ready_at: order.ready_at ?? null,
+      customer_id:
+        order.customer_id === null || order.customer_id === undefined
+          ? null
+          : Number(order.customer_id),
+      customer:
+        order.customer_id === null || order.customer_id === undefined
+          ? null
+          : customerMap.get(Number(order.customer_id)) || null,
     }));
 
     setActiveOrders(merged);
@@ -145,7 +170,7 @@ export default function Home() {
 
     if (error) return;
 
-    const rows = data || [];
+    const rows: any[] = data || [];
     setTodayOrders(rows.length);
     setTodaySales(
       rows.reduce((sum, row) => sum + Number(row.total || 0), 0)
@@ -161,10 +186,9 @@ export default function Home() {
   }, []);
 
   function addToCart(product: Product) {
-    const price = Number(product.price);
-
     setCart((prev) => {
       const existing = prev.find((item) => item.product_id === product.id);
+
       if (existing) {
         return prev.map((item) =>
           item.product_id === product.id
@@ -178,7 +202,7 @@ export default function Home() {
         {
           product_id: product.id,
           name: product.name,
-          price,
+          price: Number(product.price),
           quantity: 1,
         },
       ];
@@ -230,8 +254,8 @@ export default function Home() {
         .select()
         .single();
 
-      if (customerError) {
-        alert(customerError.message);
+      if (customerError || !customerData) {
+        alert(customerError?.message || "Could not create customer.");
         setSaving(false);
         return;
       }
@@ -250,8 +274,8 @@ export default function Home() {
         .select()
         .single();
 
-      if (orderError) {
-        alert(orderError.message);
+      if (orderError || !orderData) {
+        alert(orderError?.message || "Could not create order.");
         setSaving(false);
         return;
       }
@@ -285,9 +309,7 @@ export default function Home() {
     }
   }
 
-  async function markReadyAndOpenWhatsApp(
-    order: OrderRow & { customer: CustomerRow | null }
-  ) {
+  async function markReadyAndOpenWhatsApp(order: ActiveOrder) {
     const { error } = await supabase
       .from("orders")
       .update({
@@ -301,8 +323,8 @@ export default function Home() {
       return;
     }
 
-    const customerPhone = order.customer?.phone || "";
-    const normalizedPhone = normalizePhoneForWhatsApp(customerPhone);
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
 
     const message = `Hello${
       order.customer?.name ? " " + order.customer.name : ""
@@ -313,16 +335,13 @@ export default function Home() {
     )}`;
 
     window.open(whatsappUrl, "_blank");
-
     await refreshAll();
   }
 
   async function markCollected(orderId: number) {
     const { error } = await supabase
       .from("orders")
-      .update({
-        status: "Collected",
-      })
+      .update({ status: "Collected" })
       .eq("id", orderId);
 
     if (error) {
@@ -339,7 +358,9 @@ export default function Home() {
         <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold">Cafe POS</h1>
-            <p className="text-slate-600">Counter order entry and WhatsApp ready queue</p>
+            <p className="text-slate-600">
+              Counter order entry and WhatsApp ready queue
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
@@ -349,7 +370,9 @@ export default function Home() {
             </div>
             <div className="rounded-xl border bg-slate-50 px-4 py-3">
               <div className="text-sm text-slate-500">Today Sales</div>
-              <div className="text-2xl font-bold">{formatCurrency(todaySales)}</div>
+              <div className="text-2xl font-bold">
+                {formatCurrency(todaySales)}
+              </div>
             </div>
           </div>
         </div>
@@ -373,7 +396,7 @@ export default function Home() {
                     {product.category || "-"}
                   </div>
                   <div className="mt-2 text-lg font-bold">
-                    {formatCurrency(Number(product.price))}
+                    {formatCurrency(product.price)}
                   </div>
                 </button>
               ))}
@@ -385,7 +408,9 @@ export default function Home() {
 
             <div className="mb-4 space-y-3">
               <div>
-                <label className="mb-1 block text-sm font-medium">Customer Name</label>
+                <label className="mb-1 block text-sm font-medium">
+                  Customer Name
+                </label>
                 <input
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
@@ -395,7 +420,9 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium">Phone Number</label>
+                <label className="mb-1 block text-sm font-medium">
+                  Phone Number
+                </label>
                 <input
                   value={customerPhone}
                   onChange={(e) => setCustomerPhone(e.target.value)}
@@ -410,10 +437,7 @@ export default function Home() {
                 <p className="text-slate-500">No items added yet.</p>
               ) : (
                 cart.map((item) => (
-                  <div
-                    key={item.product_id}
-                    className="rounded-xl border p-3"
-                  >
+                  <div key={item.product_id} className="rounded-xl border p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <div className="font-medium">{item.name}</div>
@@ -429,7 +453,9 @@ export default function Home() {
                         >
                           -
                         </button>
-                        <span className="min-w-6 text-center">{item.quantity}</span>
+                        <span className="min-w-6 text-center">
+                          {item.quantity}
+                        </span>
                         <button
                           onClick={() => increaseQty(item.product_id)}
                           className="rounded-lg border px-3 py-1"
@@ -469,15 +495,15 @@ export default function Home() {
                 <p className="text-slate-500">No active orders yet.</p>
               ) : (
                 activeOrders.map((order) => (
-                  <div
-                    key={order.id}
-                    className="rounded-xl border p-4"
-                  >
+                  <div key={order.id} className="rounded-xl border p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-lg font-bold">{order.order_number}</div>
+                        <div className="text-lg font-bold">
+                          {order.order_number}
+                        </div>
                         <div className="text-sm text-slate-500">
-                          {order.customer?.name || "Guest"} | {order.customer?.phone || "-"}
+                          {order.customer?.name || "Guest"} |{" "}
+                          {order.customer?.phone || "-"}
                         </div>
                         <div className="text-sm text-slate-500">
                           {formatTime(order.created_at)}
@@ -488,7 +514,7 @@ export default function Home() {
                           </span>
                         </div>
                         <div className="mt-2 font-semibold">
-                          {formatCurrency(Number(order.total))}
+                          {formatCurrency(order.total)}
                         </div>
                       </div>
                     </div>
