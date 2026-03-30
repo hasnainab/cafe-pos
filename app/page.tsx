@@ -3,14 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type Product = {
-  id: number;
-  name: string;
-  price: number;
-  active: boolean | null;
-  categories: Category[];
-};
-
 type Category = {
   id: number;
   name: string;
@@ -22,6 +14,27 @@ type ModifierLibraryItem = {
   name: string;
   price_delta: number;
   active: boolean | null;
+};
+
+type PaymentMethod = {
+  id: number;
+  name: string;
+  active: boolean | null;
+};
+
+type SalesTax = {
+  id: number;
+  name: string;
+  rate_percent: number;
+  active: boolean | null;
+};
+
+type Product = {
+  id: number;
+  name: string;
+  price: number;
+  active: boolean | null;
+  categories: Category[];
 };
 
 type CartItem = {
@@ -54,6 +67,8 @@ type OrderView = {
   order_number: string;
   status: string;
   total: number;
+  subtotal: number;
+  tax_total: number;
   created_at: string;
   ready_at: string | null;
   reminder1_sent_at: string | null;
@@ -62,6 +77,7 @@ type OrderView = {
   customer_id: number | null;
   customer: CustomerRow | null;
   items: OrderItemRow[];
+  payment_method_name: string | null;
 };
 
 type TopItem = {
@@ -91,6 +107,20 @@ type ModifierForm = {
   id: number | null;
   name: string;
   price_delta: string;
+  active: boolean;
+};
+
+type PaymentMethodForm = {
+  id: number | null;
+  name: string;
+  active: boolean;
+  salesTaxIds: number[];
+};
+
+type SalesTaxForm = {
+  id: number | null;
+  name: string;
+  rate_percent: string;
   active: boolean;
 };
 
@@ -159,10 +189,13 @@ export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierLibrary, setModifierLibrary] = useState<ModifierLibraryItem[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [salesTaxes, setSalesTaxes] = useState<SalesTax[]>([]);
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
 
   const [activeOrders, setActiveOrders] = useState<OrderView[]>([]);
   const [completedOrders, setCompletedOrders] = useState<OrderView[]>([]);
@@ -203,7 +236,22 @@ export default function Home() {
     active: true,
   });
 
+  const [paymentMethodForm, setPaymentMethodForm] = useState<PaymentMethodForm>({
+    id: null,
+    name: "",
+    active: true,
+    salesTaxIds: [],
+  });
+
+  const [salesTaxForm, setSalesTaxForm] = useState<SalesTaxForm>({
+    id: null,
+    name: "",
+    rate_percent: "",
+    active: true,
+  });
+
   const [productModifierMap, setProductModifierMap] = useState<Record<number, number[]>>({});
+  const [paymentMethodTaxMap, setPaymentMethodTaxMap] = useState<Record<number, number[]>>({});
 
   const activeProductModifiers = useMemo(() => {
     if (!selectedProductForCart) return [];
@@ -213,7 +261,7 @@ export default function Home() {
     );
   }, [modifierLibrary, productModifierMap, selectedProductForCart]);
 
-  const cartTotal = useMemo(() => {
+  const cartSubtotal = useMemo(() => {
     return cart.reduce((sum, item) => {
       const modifierTotal = item.modifiers.reduce(
         (modSum, mod) => modSum + Number(mod.price_delta),
@@ -222,6 +270,30 @@ export default function Home() {
       return sum + (item.base_price + modifierTotal) * item.quantity;
     }, 0);
   }, [cart]);
+
+  const selectedPaymentTaxes = useMemo(() => {
+    if (!selectedPaymentMethodId) return [];
+    const taxIds = paymentMethodTaxMap[selectedPaymentMethodId] || [];
+    return salesTaxes.filter((tax) => taxIds.includes(tax.id) && tax.active !== false);
+  }, [selectedPaymentMethodId, paymentMethodTaxMap, salesTaxes]);
+
+  const taxBreakdown = useMemo(() => {
+    return selectedPaymentTaxes.map((tax) => {
+      const amount = (cartSubtotal * Number(tax.rate_percent || 0)) / 100;
+      return {
+        id: tax.id,
+        name: tax.name,
+        rate_percent: Number(tax.rate_percent || 0),
+        amount,
+      };
+    });
+  }, [selectedPaymentTaxes, cartSubtotal]);
+
+  const cartTaxTotal = useMemo(() => {
+    return taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0);
+  }, [taxBreakdown]);
+
+  const cartGrandTotal = useMemo(() => cartSubtotal + cartTaxTotal, [cartSubtotal, cartTaxTotal]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
@@ -267,6 +339,70 @@ export default function Home() {
     }));
 
     setModifierLibrary(rows);
+  }
+
+  async function loadPaymentMethods() {
+    const { data: methodsData, error: methodsError } = await supabase
+      .from("payment_methods")
+      .select("*")
+      .order("name", { ascending: true });
+
+    if (methodsError) {
+      setStatusMessage(`Could not load payment methods: ${methodsError.message}`);
+      return;
+    }
+
+    const methods: PaymentMethod[] = (methodsData || []).map((item: any) => ({
+      id: Number(item.id),
+      name: String(item.name),
+      active: item.active ?? null,
+    }));
+    setPaymentMethods(methods);
+
+    if (!selectedPaymentMethodId) {
+      const firstActive = methods.find((m) => m.active !== false);
+      if (firstActive) setSelectedPaymentMethodId(firstActive.id);
+    }
+
+    const { data: linkData, error: linkError } = await supabase
+      .from("payment_method_taxes")
+      .select("*");
+
+    if (linkError) {
+      setStatusMessage(`Could not load payment method taxes: ${linkError.message}`);
+      return;
+    }
+
+    const map: Record<number, number[]> = {};
+    (linkData || []).forEach((link: any) => {
+      const paymentMethodId = Number(link.payment_method_id);
+      const salesTaxId = Number(link.sales_tax_id);
+      if (!map[paymentMethodId]) map[paymentMethodId] = [];
+      map[paymentMethodId].push(salesTaxId);
+    });
+
+    setPaymentMethodTaxMap(map);
+  }
+
+  async function loadSalesTaxes() {
+    const { data, error } = await supabase
+      .from("sales_taxes")
+      .select("*")
+      .order("name", { ascending: true });
+
+    if (error) {
+      setStatusMessage(`Could not load sales taxes: ${error.message}`);
+      return;
+    }
+
+    const rows: SalesTax[] = (data || []).map((item: any) => ({
+      id: Number(item.id),
+      name: String(item.name),
+      rate_percent: Number(item.rate_percent || 0),
+      active: item.active ?? null,
+    }));
+
+    setSalesTaxes(rows);
   }
 
   async function loadProducts() {
@@ -340,9 +476,13 @@ export default function Home() {
       .filter((id) => id !== null && id !== undefined);
 
     const orderIds = rawOrders.map((o) => o.id);
+    const paymentMethodIds = rawOrders
+      .map((o) => o.payment_method_id)
+      .filter((id) => id !== null && id !== undefined);
 
     const customerMap = new Map<number, CustomerRow>();
     const itemsMap = new Map<number, OrderItemRow[]>();
+    const paymentMethodNameMap = new Map<number, string>();
 
     if (customerIds.length > 0) {
       const { data: customersData } = await supabase
@@ -356,6 +496,17 @@ export default function Home() {
           name: c.name ?? null,
           phone: String(c.phone),
         });
+      });
+    }
+
+    if (paymentMethodIds.length > 0) {
+      const { data: paymentMethodsData } = await supabase
+        .from("payment_methods")
+        .select("*")
+        .in("id", paymentMethodIds);
+
+      (paymentMethodsData || []).forEach((pm: any) => {
+        paymentMethodNameMap.set(Number(pm.id), String(pm.name));
       });
     }
 
@@ -385,6 +536,8 @@ export default function Home() {
       order_number: String(order.order_number),
       status: String(order.status),
       total: Number(order.total || 0),
+      subtotal: Number(order.subtotal || 0),
+      tax_total: Number(order.tax_total || 0),
       created_at: String(order.created_at),
       ready_at: order.ready_at ?? null,
       reminder1_sent_at: order.reminder1_sent_at ?? null,
@@ -399,6 +552,10 @@ export default function Home() {
           ? null
           : customerMap.get(Number(order.customer_id)) || null,
       items: itemsMap.get(Number(order.id)) || [],
+      payment_method_name:
+        order.payment_method_id === null || order.payment_method_id === undefined
+          ? null
+          : paymentMethodNameMap.get(Number(order.payment_method_id)) || null,
     }));
   }
 
@@ -504,6 +661,8 @@ export default function Home() {
     await Promise.all([
       loadCategories(),
       loadModifierLibrary(),
+      loadSalesTaxes(),
+      loadPaymentMethods(),
       loadReportData(),
       loadActiveOrders(),
       loadCompletedOrders(),
@@ -545,6 +704,15 @@ export default function Home() {
       modifierIds: prev.modifierIds.includes(modifierId)
         ? prev.modifierIds.filter((id) => id !== modifierId)
         : [...prev.modifierIds, modifierId],
+    }));
+  }
+
+  function togglePaymentMethodTax(salesTaxId: number) {
+    setPaymentMethodForm((prev) => ({
+      ...prev,
+      salesTaxIds: prev.salesTaxIds.includes(salesTaxId)
+        ? prev.salesTaxIds.filter((id) => id !== salesTaxId)
+        : [...prev.salesTaxIds, salesTaxId],
     }));
   }
 
@@ -604,6 +772,11 @@ export default function Home() {
       return;
     }
 
+    if (!selectedPaymentMethodId) {
+      alert("Please choose a payment method.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -652,9 +825,11 @@ export default function Home() {
         .insert({
           order_number: `TEMP-${Date.now()}`,
           customer_id: customerId,
+          payment_method_id: selectedPaymentMethodId,
           status: "Preparing",
-          subtotal: cartTotal,
-          total: cartTotal,
+          subtotal: cartSubtotal,
+          tax_total: cartTaxTotal,
+          total: cartGrandTotal,
         })
         .select()
         .single();
@@ -818,6 +993,144 @@ export default function Home() {
       .from("modifier_library")
       .delete()
       .eq("id", modifierId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await refreshAll();
+  }
+
+  async function savePaymentMethod() {
+    if (!paymentMethodForm.name.trim()) {
+      alert("Please enter payment method name.");
+      return;
+    }
+
+    let paymentMethodId = paymentMethodForm.id;
+
+    if (paymentMethodForm.id) {
+      const { error } = await supabase
+        .from("payment_methods")
+        .update({
+          name: paymentMethodForm.name.trim(),
+          active: paymentMethodForm.active,
+        })
+        .eq("id", paymentMethodForm.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("payment_methods")
+        .insert({
+          name: paymentMethodForm.name.trim(),
+          active: paymentMethodForm.active,
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        alert(error?.message || "Could not create payment method.");
+        return;
+      }
+
+      paymentMethodId = Number(data.id);
+    }
+
+    if (!paymentMethodId) return;
+
+    await supabase
+      .from("payment_method_taxes")
+      .delete()
+      .eq("payment_method_id", paymentMethodId);
+
+    if (paymentMethodForm.salesTaxIds.length > 0) {
+      await supabase.from("payment_method_taxes").insert(
+        paymentMethodForm.salesTaxIds.map((salesTaxId) => ({
+          payment_method_id: paymentMethodId,
+          sales_tax_id: salesTaxId,
+        }))
+      );
+    }
+
+    setPaymentMethodForm({
+      id: null,
+      name: "",
+      active: true,
+      salesTaxIds: [],
+    });
+
+    await refreshAll();
+  }
+
+  async function deletePaymentMethod(paymentMethodId: number) {
+    if (!window.confirm("Delete this payment method?")) return;
+
+    await supabase
+      .from("payment_method_taxes")
+      .delete()
+      .eq("payment_method_id", paymentMethodId);
+
+    const { error } = await supabase
+      .from("payment_methods")
+      .delete()
+      .eq("id", paymentMethodId);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await refreshAll();
+  }
+
+  async function saveSalesTax() {
+    if (!salesTaxForm.name.trim()) {
+      alert("Please enter tax name.");
+      return;
+    }
+
+    if (salesTaxForm.id) {
+      const { error } = await supabase
+        .from("sales_taxes")
+        .update({
+          name: salesTaxForm.name.trim(),
+          rate_percent: Number(salesTaxForm.rate_percent || 0),
+          active: salesTaxForm.active,
+        })
+        .eq("id", salesTaxForm.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("sales_taxes").insert({
+        name: salesTaxForm.name.trim(),
+        rate_percent: Number(salesTaxForm.rate_percent || 0),
+        active: salesTaxForm.active,
+      });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
+    setSalesTaxForm({ id: null, name: "", rate_percent: "", active: true });
+    await refreshAll();
+  }
+
+  async function deleteSalesTax(salesTaxId: number) {
+    if (!window.confirm("Delete this sales tax?")) return;
+
+    await supabase.from("payment_method_taxes").delete().eq("sales_tax_id", salesTaxId);
+
+    const { error } = await supabase.from("sales_taxes").delete().eq("id", salesTaxId);
 
     if (error) {
       alert(error.message);
@@ -1030,6 +1343,10 @@ export default function Home() {
           </div>
 
           <div className="text-sm text-slate-500">
+            Payment: {order.payment_method_name || "-"}
+          </div>
+
+          <div className="text-sm text-slate-500">
             Created: {formatTime(order.created_at)}
           </div>
 
@@ -1051,7 +1368,13 @@ export default function Home() {
             </span>
           </div>
 
-          <div className="mt-2 font-semibold">{formatCurrency(order.total)}</div>
+          <div className="mt-2 text-sm text-slate-600">
+            Subtotal: {formatCurrency(order.subtotal)}
+          </div>
+          <div className="text-sm text-slate-600">
+            Tax: {formatCurrency(order.tax_total)}
+          </div>
+          <div className="mt-1 font-semibold">{formatCurrency(order.total)}</div>
 
           <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
             <div className="font-medium">
@@ -1102,18 +1425,6 @@ export default function Home() {
               </div>
             )}
           </div>
-
-          {order.reminder1_sent_at && (
-            <div className="mt-2 text-xs text-amber-700">
-              Reminder 1 sent: {formatTime(order.reminder1_sent_at)}
-            </div>
-          )}
-
-          {order.reminder2_sent_at && (
-            <div className="mt-1 text-xs text-orange-700">
-              Reminder 2 sent: {formatTime(order.reminder2_sent_at)}
-            </div>
-          )}
         </div>
 
         {!isCompleted && (
@@ -1166,7 +1477,7 @@ export default function Home() {
           <div>
             <h1 className="text-3xl font-bold">Cafe POS</h1>
             <p className="text-slate-600">
-              User-defined categories, modifiers, notes, history, and reporting
+              Payment methods, taxes, categories, modifiers, history, and reports
             </p>
           </div>
 
@@ -1202,7 +1513,7 @@ export default function Home() {
                 viewMode === "products" ? "bg-black text-white" : "border bg-white"
               }`}
             >
-              Products
+              Setup
             </button>
             <button
               onClick={() => setViewMode("history")}
@@ -1353,6 +1664,30 @@ export default function Home() {
                     placeholder="03001234567"
                   />
                 </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium">
+                    Payment Method
+                  </label>
+                  <select
+                    value={selectedPaymentMethodId ?? ""}
+                    onChange={(e) =>
+                      setSelectedPaymentMethodId(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                  >
+                    <option value="">Select payment method</option>
+                    {paymentMethods
+                      .filter((pm) => pm.active !== false)
+                      .map((pm) => (
+                        <option key={pm.id} value={pm.id}>
+                          {pm.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -1421,11 +1756,33 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="mt-5 rounded-xl border bg-slate-50 p-4">
+              <div className="mt-5 rounded-xl border bg-slate-50 p-4 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">Total</span>
+                  <span className="font-medium">Subtotal</span>
+                  <span>{formatCurrency(cartSubtotal)}</span>
+                </div>
+
+                {taxBreakdown.map((tax) => (
+                  <div
+                    key={tax.id}
+                    className="flex items-center justify-between text-sm text-slate-700"
+                  >
+                    <span>
+                      {tax.name} ({tax.rate_percent}%)
+                    </span>
+                    <span>{formatCurrency(tax.amount)}</span>
+                  </div>
+                ))}
+
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Tax Total</span>
+                  <span>{formatCurrency(cartTaxTotal)}</span>
+                </div>
+
+                <div className="flex items-center justify-between border-t pt-2">
+                  <span className="font-medium">Grand Total</span>
                   <span className="text-xl font-bold">
-                    {formatCurrency(cartTotal)}
+                    {formatCurrency(cartGrandTotal)}
                   </span>
                 </div>
               </div>
@@ -1453,22 +1810,19 @@ export default function Home() {
         )}
 
         {viewMode === "products" && (
-          <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="grid gap-6 lg:grid-cols-2">
             <section className="space-y-6">
               <div className="rounded-2xl bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Categories</h2>
                 <div className="space-y-3">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium">Name</label>
-                    <input
-                      value={categoryForm.name}
-                      onChange={(e) =>
-                        setCategoryForm({ ...categoryForm, name: e.target.value })
-                      }
-                      className="w-full rounded-xl border px-3 py-2"
-                    />
-                  </div>
-
+                  <input
+                    value={categoryForm.name}
+                    onChange={(e) =>
+                      setCategoryForm({ ...categoryForm, name: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Category name"
+                  />
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -1479,7 +1833,6 @@ export default function Home() {
                     />
                     <span>Active</span>
                   </label>
-
                   <div className="flex gap-2">
                     <button
                       onClick={saveCategory}
@@ -1502,9 +1855,7 @@ export default function Home() {
                       key={category.id}
                       className="flex items-center justify-between rounded-lg border px-3 py-2"
                     >
-                      <span>
-                        {category.name} | {category.active === false ? "Inactive" : "Active"}
-                      </span>
+                      <span>{category.name}</span>
                       <div className="flex gap-2">
                         <button
                           onClick={() =>
@@ -1533,32 +1884,22 @@ export default function Home() {
               <div className="rounded-2xl bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Modifier Library</h2>
                 <div className="space-y-3">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium">Name</label>
-                    <input
-                      value={modifierForm.name}
-                      onChange={(e) =>
-                        setModifierForm({ ...modifierForm, name: e.target.value })
-                      }
-                      className="w-full rounded-xl border px-3 py-2"
-                      placeholder="More Ice, No Sugar, Extra Shot"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium">
-                      Price Change
-                    </label>
-                    <input
-                      value={modifierForm.price_delta}
-                      onChange={(e) =>
-                        setModifierForm({ ...modifierForm, price_delta: e.target.value })
-                      }
-                      className="w-full rounded-xl border px-3 py-2"
-                      placeholder="0 or 50"
-                    />
-                  </div>
-
+                  <input
+                    value={modifierForm.name}
+                    onChange={(e) =>
+                      setModifierForm({ ...modifierForm, name: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Modifier name"
+                  />
+                  <input
+                    value={modifierForm.price_delta}
+                    onChange={(e) =>
+                      setModifierForm({ ...modifierForm, price_delta: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Price change"
+                  />
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -1569,7 +1910,6 @@ export default function Home() {
                     />
                     <span>Active</span>
                   </label>
-
                   <div className="flex gap-2">
                     <button
                       onClick={saveModifierLibraryItem}
@@ -1579,12 +1919,7 @@ export default function Home() {
                     </button>
                     <button
                       onClick={() =>
-                        setModifierForm({
-                          id: null,
-                          name: "",
-                          price_delta: "",
-                          active: true,
-                        })
+                        setModifierForm({ id: null, name: "", price_delta: "", active: true })
                       }
                       className="rounded-xl border px-4 py-2"
                     >
@@ -1603,8 +1938,7 @@ export default function Home() {
                         {modifier.name} |{" "}
                         {Number(modifier.price_delta) === 0
                           ? "Free"
-                          : formatCurrency(Number(modifier.price_delta))}{" "}
-                        | {modifier.active === false ? "Inactive" : "Active"}
+                          : formatCurrency(Number(modifier.price_delta))}
                       </span>
                       <div className="flex gap-2">
                         <button
@@ -1631,6 +1965,220 @@ export default function Home() {
                   ))}
                 </div>
               </div>
+
+              <div className="rounded-2xl bg-white p-5 shadow-sm">
+                <h2 className="mb-4 text-2xl font-semibold">Sales Taxes</h2>
+                <div className="space-y-3">
+                  <input
+                    value={salesTaxForm.name}
+                    onChange={(e) =>
+                      setSalesTaxForm({ ...salesTaxForm, name: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Tax name"
+                  />
+                  <input
+                    value={salesTaxForm.rate_percent}
+                    onChange={(e) =>
+                      setSalesTaxForm({
+                        ...salesTaxForm,
+                        rate_percent: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Rate percent"
+                  />
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={salesTaxForm.active}
+                      onChange={(e) =>
+                        setSalesTaxForm({
+                          ...salesTaxForm,
+                          active: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>Active</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={saveSalesTax}
+                      className="rounded-xl bg-black px-4 py-2 font-medium text-white"
+                    >
+                      {salesTaxForm.id ? "Update Tax" : "Add Tax"}
+                    </button>
+                    <button
+                      onClick={() =>
+                        setSalesTaxForm({
+                          id: null,
+                          name: "",
+                          rate_percent: "",
+                          active: true,
+                        })
+                      }
+                      className="rounded-xl border px-4 py-2"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {salesTaxes.map((tax) => (
+                    <div
+                      key={tax.id}
+                      className="flex items-center justify-between rounded-lg border px-3 py-2"
+                    >
+                      <span>
+                        {tax.name} | {tax.rate_percent}%
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() =>
+                            setSalesTaxForm({
+                              id: tax.id,
+                              name: tax.name,
+                              rate_percent: String(tax.rate_percent),
+                              active: tax.active !== false,
+                            })
+                          }
+                          className="rounded-lg border px-3 py-1"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => deleteSalesTax(tax.id)}
+                          className="rounded-lg border px-3 py-1"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-white p-5 shadow-sm">
+                <h2 className="mb-4 text-2xl font-semibold">Payment Methods</h2>
+                <div className="space-y-3">
+                  <input
+                    value={paymentMethodForm.name}
+                    onChange={(e) =>
+                      setPaymentMethodForm({
+                        ...paymentMethodForm,
+                        name: e.target.value,
+                      })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Payment method name"
+                  />
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={paymentMethodForm.active}
+                      onChange={(e) =>
+                        setPaymentMethodForm({
+                          ...paymentMethodForm,
+                          active: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>Active</span>
+                  </label>
+
+                  <div className="rounded-xl border p-3">
+                    <div className="mb-2 font-medium">Applied Taxes</div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {salesTaxes
+                        .filter((tax) => tax.active !== false)
+                        .map((tax) => (
+                          <label key={tax.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={paymentMethodForm.salesTaxIds.includes(tax.id)}
+                              onChange={() => togglePaymentMethodTax(tax.id)}
+                            />
+                            <span>
+                              {tax.name} ({tax.rate_percent}%)
+                            </span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={savePaymentMethod}
+                      className="rounded-xl bg-black px-4 py-2 font-medium text-white"
+                    >
+                      {paymentMethodForm.id ? "Update Payment Method" : "Add Payment Method"}
+                    </button>
+                    <button
+                      onClick={() =>
+                        setPaymentMethodForm({
+                          id: null,
+                          name: "",
+                          active: true,
+                          salesTaxIds: [],
+                        })
+                      }
+                      className="rounded-xl border px-4 py-2"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {paymentMethods.map((pm) => {
+                    const linkedTaxIds = paymentMethodTaxMap[pm.id] || [];
+                    const linkedTaxes = salesTaxes.filter((tax) =>
+                      linkedTaxIds.includes(tax.id)
+                    );
+
+                    return (
+                      <div
+                        key={pm.id}
+                        className="rounded-lg border px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div>{pm.name}</div>
+                            <div className="text-xs text-slate-600">
+                              Taxes:{" "}
+                              {linkedTaxes.length > 0
+                                ? linkedTaxes.map((tax) => tax.name).join(", ")
+                                : "-"}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() =>
+                                setPaymentMethodForm({
+                                  id: pm.id,
+                                  name: pm.name,
+                                  active: pm.active !== false,
+                                  salesTaxIds: linkedTaxIds,
+                                })
+                              }
+                              className="rounded-lg border px-3 py-1"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => deletePaymentMethod(pm.id)}
+                              className="rounded-lg border px-3 py-1"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </section>
 
             <section className="space-y-6">
@@ -1638,27 +2186,23 @@ export default function Home() {
                 <h2 className="mb-4 text-2xl font-semibold">Add / Edit Product</h2>
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium">Name</label>
-                    <input
-                      value={productForm.name}
-                      onChange={(e) =>
-                        setProductForm({ ...productForm, name: e.target.value })
-                      }
-                      className="w-full rounded-xl border px-3 py-2"
-                    />
-                  </div>
+                  <input
+                    value={productForm.name}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, name: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Product name"
+                  />
 
-                  <div>
-                    <label className="mb-1 block text-sm font-medium">Price</label>
-                    <input
-                      value={productForm.price}
-                      onChange={(e) =>
-                        setProductForm({ ...productForm, price: e.target.value })
-                      }
-                      className="w-full rounded-xl border px-3 py-2"
-                    />
-                  </div>
+                  <input
+                    value={productForm.price}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, price: e.target.value })
+                    }
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder="Price"
+                  />
 
                   <label className="flex items-center gap-2">
                     <input
