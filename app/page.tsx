@@ -90,9 +90,25 @@ function getElapsedSeconds(start: string, end?: string | null) {
   const endMs = end ? new Date(end).getTime() : Date.now();
   return Math.max(0, Math.floor((endMs - startMs) / 1000));
 }
+async function getNextDailyOrderNumber() {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
 
-function getShortOrderNumber(orderId: number) {
-  return `STT-${String(orderId).padStart(6, "0")}`;
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id")
+    .gte("created_at", startOfDay.toISOString())
+    .lte("created_at", endOfDay.toISOString());
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const nextNumber = (data?.length || 0) + 1;
+  return `STT-${String(nextNumber).padStart(6, "0")}`;
 }
 
 export default function Home() {
@@ -468,7 +484,7 @@ export default function Home() {
         return;
       }
 
-      const shortOrderNumber = getShortOrderNumber(Number(orderData.id));
+      const shortOrderNumber = await getNextDailyOrderNumber();
 
       const { error: orderNumberUpdateError } = await supabase
         .from("orders")
