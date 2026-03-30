@@ -31,6 +31,9 @@ type ActiveOrder = {
   total: number;
   created_at: string;
   ready_at: string | null;
+  reminder1_sent_at: string | null;
+  reminder2_sent_at: string | null;
+  collected_at: string | null;
   customer_id: number | null;
   customer: CustomerRow | null;
 };
@@ -146,6 +149,9 @@ export default function Home() {
       total: Number(order.total || 0),
       created_at: String(order.created_at),
       ready_at: order.ready_at ?? null,
+      reminder1_sent_at: order.reminder1_sent_at ?? null,
+      reminder2_sent_at: order.reminder2_sent_at ?? null,
+      collected_at: order.collected_at ?? null,
       customer_id:
         order.customer_id === null || order.customer_id === undefined
           ? null
@@ -338,10 +344,69 @@ export default function Home() {
     await refreshAll();
   }
 
+  async function sendReminder1(order: ActiveOrder) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        reminder1_sent_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
+
+    const message = `Hello${
+      order.customer?.name ? " " + order.customer.name : ""
+    }, your order ${order.order_number} is ready and waiting for pickup at the counter. Please collect it when convenient.`;
+
+    const whatsappUrl = `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(
+      message
+    )}`;
+
+    window.open(whatsappUrl, "_blank");
+    await refreshAll();
+  }
+
+  async function sendReminder2(order: ActiveOrder) {
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        reminder2_sent_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    const phone = order.customer?.phone || "";
+    const normalizedPhone = normalizePhoneForWhatsApp(phone);
+
+    const message = `Hello${
+      order.customer?.name ? " " + order.customer.name : ""
+    }, this is a reminder that your order ${order.order_number} is still waiting for pickup at the counter. Please collect it as soon as possible.`;
+
+    const whatsappUrl = `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(
+      message
+    )}`;
+
+    window.open(whatsappUrl, "_blank");
+    await refreshAll();
+  }
+
   async function markCollected(orderId: number) {
     const { error } = await supabase
       .from("orders")
-      .update({ status: "Collected" })
+      .update({
+        status: "Collected",
+        collected_at: new Date().toISOString(),
+      })
       .eq("id", orderId);
 
     if (error) {
@@ -502,7 +567,8 @@ export default function Home() {
                           {order.order_number}
                         </div>
                         <div className="text-sm text-slate-500">
-                          {order.customer?.name || "Guest"} |{" "}
+                          {order.customer?.name || "Guest"}{" "}
+                          {"|"}{" "}
                           {order.customer?.phone || "-"}
                         </div>
                         <div className="text-sm text-slate-500">
@@ -527,6 +593,38 @@ export default function Home() {
                         >
                           Ready + WhatsApp
                         </button>
+                      )}
+
+                      {order.status === "Ready" && !order.reminder1_sent_at && (
+                        <button
+                          onClick={() => sendReminder1(order)}
+                          className="rounded-xl bg-amber-500 px-4 py-2 font-medium text-white"
+                        >
+                          Reminder 1
+                        </button>
+                      )}
+
+                      {order.status === "Ready" &&
+                        order.reminder1_sent_at &&
+                        !order.reminder2_sent_at && (
+                          <button
+                            onClick={() => sendReminder2(order)}
+                            className="rounded-xl bg-orange-600 px-4 py-2 font-medium text-white"
+                          >
+                            Reminder 2
+                          </button>
+                        )}
+
+                      {order.status === "Ready" && order.reminder1_sent_at && (
+                        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
+                          Reminder 1 sent
+                        </div>
+                      )}
+
+                      {order.status === "Ready" && order.reminder2_sent_at && (
+                        <div className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-2 text-sm">
+                          Reminder 2 sent
+                        </div>
                       )}
 
                       <button
