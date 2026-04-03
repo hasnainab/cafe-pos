@@ -11,4 +11,15 @@ if (!supabaseUrl || !supabaseKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabaseAuth = createClient(supabaseUrl, supabaseKey);
+
+export type StaffRole = "admin" | "manager" | "cashier";
+
+export type StaffProfile = {
+  id: string;
+  full_name: string | null;
+  role: StaffRole;
+  pin_code?: string | null;
+  active?: boolean | null;
+  is_active?: boolean | null;
+};

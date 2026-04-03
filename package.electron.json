@@ -1,0 +1,13 @@
+{
+  "name": "spill-the-tea-electron-runner",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "electron": "^37.2.0",
+    "wait-on": "^8.0.1"
+  }
+}

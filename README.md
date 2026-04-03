@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Spill The Tea - Electron printer integration starter
 
-## Getting Started
+This starter wraps your existing Next.js POS in Electron so you can:
+- list installed printers
+- save printer roles
+- print silently to a named printer
+- route:
+  - customer receipt -> receipt/kitchen printer
+  - kitchen ticket -> receipt/kitchen printer
+  - drink stickers -> sticker printer
 
-First, run the development server:
+## Why Electron
+Electron can print silently with a specific `deviceName` using `webContents.print(...)`.
+That is the recommended route when the POS and printers run on the same cashier computer.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Files
+- `electron/main.js` - Electron main process and silent print IPC
+- `electron/preload.js` - safe renderer bridge
+- `src-snippets/electron-pos.d.ts` - window typings
+- `src-snippets/print-helpers.ts` - HTML builders for receipt, kitchen ticket, and 2x1 stickers
+- `src-snippets/renderer-print-example.ts` - example call pattern
+- `package.electron.json` - dependencies and dev script
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Install
+1. Copy `electron/` into your project root.
+2. Copy `src-snippets/electron-pos.d.ts` into your app source tree.
+3. Copy `src-snippets/print-helpers.ts` into your app source tree.
+4. Merge `package.electron.json` fields into your project's `package.json`.
+5. Install:
+   - `npm install -D electron concurrently wait-on`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Run
+Use:
+- `npm run electron:dev`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+That starts the Next.js dev server and launches Electron after the app is ready.
 
-## Learn More
+## Renderer integration
+From your POS page:
+- call `window.electronPOS.listPrinters()` to show installed printers
+- call `window.electronPOS.savePrintSettings(...)` to save selected printer names
+- after order creation, build print HTML and call:
+  - `printReceipt`
+  - `printKitchen`
+  - `printStickers`
 
-To learn more about Next.js, take a look at the following resources:
+## Sticker logic
+The supplied helper expands drink items only and counts across all drinks in the order:
+- Cappuccino 1/3
+- Cappuccino 2/3
+- Latte 3/3
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+- This is a working starter, not a full packaged installer.
+- Label printer margins and scaling may need minor adjustment for your exact printer model.
+- If you want, the next step is to wire your current POS page directly to these Electron APIs.
