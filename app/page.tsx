@@ -2411,72 +2411,73 @@ const canEditSetup = currentRole === "admin";
     );
   }
 
-  async function loadProducts() {
-    const { data: productData, error: productError } = await supabase
-      .from("products")
-      .select("*")
-      .order("name", { ascending: true });
+  
+async function loadProducts() {
+  const { data: productData, error: productError } = await supabase
+    .from("products")
+    .select(`
+      id,
+      name,
+      price,
+      active,
+      product_categories (
+        category_id,
+        categories (
+          id,
+          name,
+          active
+        )
+      )
+    `)
+    .order("name", { ascending: true });
 
-    if (productError) {
-      setStatusMessage(`Could not load products: ${productError.message}`);
-      return;
-    }
-
-    const { data: productCategoryLinks, error: productCategoryLinkError } =
-      await supabase.from("product_categories").select("*");
-
-    if (productCategoryLinkError) {
-      setStatusMessage(`Could not load product categories: ${productCategoryLinkError.message}`);
-      return;
-    }
-
-    const { data: productModifierLinks, error: productModifierLinkError } =
-      await supabase.from("product_modifier_links").select("*");
-
-    if (productModifierLinkError) {
-      setStatusMessage(`Could not load product modifiers: ${productModifierLinkError.message}`);
-      return;
-    }
-
-    const productToCategoryIds: Record<number, string[]> = {};
-    (productCategoryLinks || []).forEach((link: any) => {
-      const productId = Number(link.product_id);
-      const categoryId = String(link.category_id);
-      if (!productToCategoryIds[productId]) productToCategoryIds[productId] = [];
-      productToCategoryIds[productId].push(categoryId);
-    });
-
-    const productToModifierIds: Record<number, number[]> = {};
-    (productModifierLinks || []).forEach((link: any) => {
-      const productId = Number(link.product_id);
-      const modifierId = Number(link.modifier_id);
-      if (!productToModifierIds[productId]) productToModifierIds[productId] = [];
-      productToModifierIds[productId].push(modifierId);
-    });
-
-    setProductModifierMap(productToModifierIds);
-
-    const categoryMap = new Map<string, Category>();
-    categories.forEach((cat) => categoryMap.set(cat.id, cat));
-
-    const rows: Product[] = (productData || []).map((item: any) => {
-      const productId = Number(item.id);
-      const categoryIds = productToCategoryIds[productId] || [];
-      return {
-        id: productId,
-        name: String(item.name),
-        price: Number(item.price),
-        active: item.active ?? null,
-        categories: categoryIds
-          .map((id) => categoryMap.get(id))
-          .filter((cat): cat is Category => !!cat),
-      };
-    });
-
-    setProducts(rows);
+  if (productError) {
+    setStatusMessage(`Could not load products: ${productError.message}`);
+    return;
   }
 
-  async function buildOrdersWithRelations(rawOrders: any[]): Promise<OrderView[]> {
+  const { data: productModifierLinks, error: productModifierLinkError } =
+    await supabase.from("product_modifier_links").select("*");
+
+  if (productModifierLinkError) {
+    setStatusMessage(`Could not load product modifiers: ${productModifierLinkError.message}`);
+    return;
+  }
+
+  const productToModifierIds: Record<number, number[]> = {};
+  (productModifierLinks || []).forEach((link: any) => {
+    const productId = Number(link.product_id);
+    const modifierId = Number(link.modifier_id);
+    if (!productToModifierIds[productId]) productToModifierIds[productId] = [];
+    productToModifierIds[productId].push(modifierId);
+  });
+
+  setProductModifierMap(productToModifierIds);
+
+  const rows: Product[] = (productData || []).map((item: any) => {
+    const linkedCategories = Array.isArray(item.product_categories) ? item.product_categories : [];
+    const categoriesForProduct: Category[] = linkedCategories
+      .map((link: any) => link.categories)
+      .filter((cat: any) => !!cat)
+      .map((cat: any) => ({
+        id: String(cat.id),
+        name: String(cat.name),
+        active: cat.active ?? null,
+      }));
+
+    return {
+      id: Number(item.id),
+      name: String(item.name),
+      price: Number(item.price || 0),
+      active: item.active ?? null,
+      categories: categoriesForProduct,
+    };
+  });
+
+  setProducts(rows);
+}
+
+async function buildOrdersWithRelations(rawOrders: any[]): Promise<OrderView[]> {
     const customerIds = rawOrders
       .map((o) => o.customer_id)
       .filter((id) => id !== null && id !== undefined);
@@ -5075,72 +5076,6 @@ const canEditSetup = currentRole === "admin";
     await refreshAll();
   }
 
-  async function deleteProduct(productId: number, productName: string) {
-    if (!canEditSetup) {
-      setStatusMessage("You do not have permission to delete products");
-      return;
-    }
-
-    const confirmed = window.confirm(`Delete "${productName}"? This cannot be undone.`);
-    if (!confirmed) return;
-
-    const { error: recipeDeleteError } = await supabase
-      .from("product_recipes")
-      .delete()
-      .eq("product_id", productId);
-
-    if (recipeDeleteError) {
-      setStatusMessage(`Could not remove product recipes: ${recipeDeleteError.message}`);
-      return;
-    }
-
-    const { error: modifierDeleteError } = await supabase
-      .from("product_modifier_links")
-      .delete()
-      .eq("product_id", productId);
-
-    if (modifierDeleteError) {
-      setStatusMessage(`Could not remove product modifiers: ${modifierDeleteError.message}`);
-      return;
-    }
-
-    const { error: categoryDeleteError } = await supabase
-      .from("product_categories")
-      .delete()
-      .eq("product_id", productId);
-
-    if (categoryDeleteError) {
-      setStatusMessage(`Could not remove product categories: ${categoryDeleteError.message}`);
-      return;
-    }
-
-    const { error: productDeleteError } = await supabase
-      .from("products")
-      .delete()
-      .eq("id", productId);
-
-    if (productDeleteError) {
-      setStatusMessage(`Could not delete product: ${productDeleteError.message}`);
-      return;
-    }
-
-    setProductForm((prev) =>
-      prev.id === productId
-        ? {
-            id: null,
-            name: "",
-            price: "",
-            active: true,
-            categoryIds: [],
-            modifierIds: [],
-          }
-        : prev
-    );
-
-    setStatusMessage(`Deleted product: ${productName}`);
-    await refreshAll();
-  }
-
   function loadProductIntoForm(product: Product) {
     setProductForm({
       id: product.id,
@@ -5153,7 +5088,93 @@ const canEditSetup = currentRole === "admin";
     setViewMode("setup");
   }
 
-  function resetLineBuilder() {
+async function deleteProduct(product: Product) {
+  if (!canEditSetup) {
+    setStatusMessage("You do not have permission to edit setup data");
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete product "${product.name}"? This will also remove its category, modifier, recipe, and order item links where possible.`);
+  if (!confirmed) return;
+
+  const productId = Number(product.id);
+
+  const { error: recipeDeleteError } = await supabase
+    .from("product_recipes")
+    .delete()
+    .eq("product_id", productId);
+
+  if (recipeDeleteError) {
+    setStatusMessage(`Could not delete product recipes: ${recipeDeleteError.message}`);
+    return;
+  }
+
+  const { error: modifierDeleteError } = await supabase
+    .from("product_modifier_links")
+    .delete()
+    .eq("product_id", productId);
+
+  if (modifierDeleteError) {
+    setStatusMessage(`Could not delete product modifiers: ${modifierDeleteError.message}`);
+    return;
+  }
+
+  const { error: categoryDeleteError } = await supabase
+    .from("product_categories")
+    .delete()
+    .eq("product_id", productId);
+
+  if (categoryDeleteError) {
+    setStatusMessage(`Could not delete product categories: ${categoryDeleteError.message}`);
+    return;
+  }
+
+  const { error: orderItemsDetachError } = await supabase
+    .from("order_items")
+    .update({ product_id: null })
+    .eq("product_id", productId);
+
+  if (orderItemsDetachError) {
+    setStatusMessage(`Could not detach order items from product: ${orderItemsDetachError.message}`);
+    return;
+  }
+
+  const { error: movementDetachError } = await supabase
+    .from("inventory_movements")
+    .update({ product_id: null })
+    .eq("product_id", productId);
+
+  if (movementDetachError) {
+    setStatusMessage(`Could not detach inventory movements from product: ${movementDetachError.message}`);
+    return;
+  }
+
+  const { error: productDeleteError } = await supabase
+    .from("products")
+    .delete()
+    .eq("id", productId);
+
+  if (productDeleteError) {
+    setStatusMessage(`Could not delete product: ${productDeleteError.message}`);
+    return;
+  }
+
+  if (productForm.id === productId) {
+    setProductForm({
+      id: null,
+      name: "",
+      price: "",
+      active: true,
+      categoryIds: [],
+      modifierIds: [],
+    });
+  }
+
+  setStatusMessage("Product deleted");
+  await refreshAll();
+}
+
+function resetLineBuilder() {
     setSelectedProductForCart(null);
     setSelectedModifierIds([]);
     setLineNotes("");
@@ -9356,47 +9377,42 @@ const canEditSetup = currentRole === "admin";
                 </div>
               </section>
 
-              <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
-                <h2 className="mb-4 text-2xl font-semibold">Existing Products</h2>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {products.map((product) => (
-                    <div
-                      key={product.id}
-                      className="rounded-2xl border p-4"
-                    >
-                      <button
-                        onClick={() => loadProductIntoForm(product)}
-                        className="block w-full text-left"
-                      >
-                        <div className="font-semibold">{product.name}</div>
-                        <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
-                        <div className="mt-2 text-xs text-rose-700/70">
-                          Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
-                        </div>
-                        <div className="text-xs text-rose-700/70">
-                          Modifiers: {(productModifierMap[product.id] || []).length}
-                        </div>
-                      </button>
-
-                      <div className="mt-4 flex gap-2">
-                        <button
-                          onClick={() => loadProductIntoForm(product)}
-                          className="rounded-xl border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => deleteProduct(product.id, product.name)}
-                          className="rounded-xl bg-rose-500 px-3 py-2 text-sm font-medium text-white"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </section>
+              
+  <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+    <h2 className="mb-4 text-2xl font-semibold">Existing Products</h2>
+    <div className="grid gap-3 md:grid-cols-2">
+      {products.map((product) => (
+        <div
+          key={product.id}
+          className="rounded-2xl border p-4 text-left"
+        >
+          <div className="font-semibold">{product.name}</div>
+          <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
+          <div className="mt-2 text-xs text-rose-700/70">
+            Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
+          </div>
+          <div className="text-xs text-rose-700/70">
+            Modifiers: {(productModifierMap[product.id] || []).length}
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => loadProductIntoForm(product)}
+              className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => void deleteProduct(product)}
+              className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-600"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
+</section>
 
             <section className="space-y-6">
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
