@@ -1064,6 +1064,7 @@ const canEditSetup = currentRole === "admin";
   const [autoPrintStickers, setAutoPrintStickers] = useState(true);
 
   const [selectedProductForCart, setSelectedProductForCart] = useState<Product | null>(null);
+  const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
   const [selectedQueueOrder, setSelectedQueueOrder] = useState<OrderView | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<number[]>([]);
   const [lineNotes, setLineNotes] = useState("");
@@ -1819,6 +1820,24 @@ const canEditSetup = currentRole === "admin";
       (m) => allowedIds.includes(m.id) && m.active !== false
     );
   }, [modifierLibrary, productModifierMap, selectedProductForCart]);
+
+  const posCategories = useMemo(
+    () => categories.filter((category) => category.active !== false),
+    [categories]
+  );
+
+  const filteredPosProducts = useMemo(() => {
+    const activeProducts = products.filter((product) => product.active !== false);
+    if (selectedPosCategoryId === "all") return activeProducts;
+    return activeProducts.filter((product) =>
+      product.categories.some((category) => category.id === selectedPosCategoryId)
+    );
+  }, [products, selectedPosCategoryId]);
+
+  const selectedPosCategoryName = useMemo(() => {
+    if (selectedPosCategoryId === "all") return "All Items";
+    return posCategories.find((category) => category.id === selectedPosCategoryId)?.name || "Selected Category";
+  }, [posCategories, selectedPosCategoryId]);
 
   const modifierEffectByModifierId = useMemo(() => {
     const map = new Map<number, ModifierInventoryEffect>();
@@ -5934,11 +5953,51 @@ function resetLineBuilder() {
                   ) : null}
 
                   <div className="mt-6">
-                    <div className="mb-3 text-sm font-medium text-slate-900">Select Product</div>
-                    <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                      {products
-                        .filter((p) => p.active !== false)
-                        .map((product) => {
+                    <div className="mb-3 text-sm font-medium text-slate-900">Select Category</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPosCategoryId("all")}
+                        className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                          selectedPosCategoryId === "all"
+                            ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+                            : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                        }`}
+                      >
+                        All Items
+                      </button>
+                      {posCategories.map((category) => (
+                        <button
+                          key={category.id}
+                          type="button"
+                          onClick={() => setSelectedPosCategoryId(category.id)}
+                          className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                            selectedPosCategoryId === category.id
+                              ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+                              : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                          }`}
+                        >
+                          {category.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mb-3 mt-5 flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-slate-900">
+                        {selectedPosCategoryName}
+                      </div>
+                      <div className="text-xs text-rose-700/70">
+                        {filteredPosProducts.length} item{filteredPosProducts.length === 1 ? "" : "s"}
+                      </div>
+                    </div>
+
+                    {filteredPosProducts.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-6 text-sm text-rose-600">
+                        No items found in this category yet.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                        {filteredPosProducts.map((product) => {
                           const selected = selectedProductForCart?.id === product.id;
 
                           return (
@@ -5975,7 +6034,8 @@ function resetLineBuilder() {
                             </button>
                           );
                         })}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </section>
               </section>
