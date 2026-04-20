@@ -1064,8 +1064,6 @@ const canEditSetup = currentRole === "admin";
   const [autoPrintStickers, setAutoPrintStickers] = useState(true);
 
   const [selectedProductForCart, setSelectedProductForCart] = useState<Product | null>(null);
-  const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
-  const [posSearchTerm, setPosSearchTerm] = useState("");
   const [selectedQueueOrder, setSelectedQueueOrder] = useState<OrderView | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<number[]>([]);
   const [lineNotes, setLineNotes] = useState("");
@@ -1822,36 +1820,6 @@ const canEditSetup = currentRole === "admin";
     );
   }, [modifierLibrary, productModifierMap, selectedProductForCart]);
 
-  const posCategories = useMemo(
-    () => categories.filter((category) => category.active !== false),
-    [categories]
-  );
-
-  const filteredPosProducts = useMemo(() => {
-    const activeProducts = products.filter((product) => product.active !== false);
-    const categoryFiltered =
-      selectedPosCategoryId === "all"
-        ? activeProducts
-        : activeProducts.filter((product) =>
-            product.categories.some((category) => category.id === selectedPosCategoryId)
-          );
-
-    const query = posSearchTerm.trim().toLowerCase();
-    if (!query) return categoryFiltered;
-
-    return categoryFiltered.filter((product) =>
-      [product.name, ...(product.categories || []).map((category) => category.name)]
-        .join(" ")
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [products, selectedPosCategoryId, posSearchTerm]);
-
-  const selectedPosCategoryName = useMemo(() => {
-    if (selectedPosCategoryId === "all") return "All Items";
-    return posCategories.find((category) => category.id === selectedPosCategoryId)?.name || "Selected Category";
-  }, [posCategories, selectedPosCategoryId]);
-
   const modifierEffectByModifierId = useMemo(() => {
     const map = new Map<number, ModifierInventoryEffect>();
     modifierInventoryEffects.forEach((effect) => {
@@ -2443,73 +2411,72 @@ const canEditSetup = currentRole === "admin";
     );
   }
 
-  
-async function loadProducts() {
-  const { data: productData, error: productError } = await supabase
-    .from("products")
-    .select(`
-      id,
-      name,
-      price,
-      active,
-      product_categories (
-        category_id,
-        categories (
-          id,
-          name,
-          active
-        )
-      )
-    `)
-    .order("name", { ascending: true });
+  async function loadProducts() {
+    const { data: productData, error: productError } = await supabase
+      .from("products")
+      .select("*")
+      .order("name", { ascending: true });
 
-  if (productError) {
-    setStatusMessage(`Could not load products: ${productError.message}`);
-    return;
+    if (productError) {
+      setStatusMessage(`Could not load products: ${productError.message}`);
+      return;
+    }
+
+    const { data: productCategoryLinks, error: productCategoryLinkError } =
+      await supabase.from("product_categories").select("*");
+
+    if (productCategoryLinkError) {
+      setStatusMessage(`Could not load product categories: ${productCategoryLinkError.message}`);
+      return;
+    }
+
+    const { data: productModifierLinks, error: productModifierLinkError } =
+      await supabase.from("product_modifier_links").select("*");
+
+    if (productModifierLinkError) {
+      setStatusMessage(`Could not load product modifiers: ${productModifierLinkError.message}`);
+      return;
+    }
+
+    const productToCategoryIds: Record<number, string[]> = {};
+    (productCategoryLinks || []).forEach((link: any) => {
+      const productId = Number(link.product_id);
+      const categoryId = String(link.category_id);
+      if (!productToCategoryIds[productId]) productToCategoryIds[productId] = [];
+      productToCategoryIds[productId].push(categoryId);
+    });
+
+    const productToModifierIds: Record<number, number[]> = {};
+    (productModifierLinks || []).forEach((link: any) => {
+      const productId = Number(link.product_id);
+      const modifierId = Number(link.modifier_id);
+      if (!productToModifierIds[productId]) productToModifierIds[productId] = [];
+      productToModifierIds[productId].push(modifierId);
+    });
+
+    setProductModifierMap(productToModifierIds);
+
+    const categoryMap = new Map<string, Category>();
+    categories.forEach((cat) => categoryMap.set(cat.id, cat));
+
+    const rows: Product[] = (productData || []).map((item: any) => {
+      const productId = Number(item.id);
+      const categoryIds = productToCategoryIds[productId] || [];
+      return {
+        id: productId,
+        name: String(item.name),
+        price: Number(item.price),
+        active: item.active ?? null,
+        categories: categoryIds
+          .map((id) => categoryMap.get(id))
+          .filter((cat): cat is Category => !!cat),
+      };
+    });
+
+    setProducts(rows);
   }
 
-  const { data: productModifierLinks, error: productModifierLinkError } =
-    await supabase.from("product_modifier_links").select("*");
-
-  if (productModifierLinkError) {
-    setStatusMessage(`Could not load product modifiers: ${productModifierLinkError.message}`);
-    return;
-  }
-
-  const productToModifierIds: Record<number, number[]> = {};
-  (productModifierLinks || []).forEach((link: any) => {
-    const productId = Number(link.product_id);
-    const modifierId = Number(link.modifier_id);
-    if (!productToModifierIds[productId]) productToModifierIds[productId] = [];
-    productToModifierIds[productId].push(modifierId);
-  });
-
-  setProductModifierMap(productToModifierIds);
-
-  const rows: Product[] = (productData || []).map((item: any) => {
-    const linkedCategories = Array.isArray(item.product_categories) ? item.product_categories : [];
-    const categoriesForProduct: Category[] = linkedCategories
-      .map((link: any) => link.categories)
-      .filter((cat: any) => !!cat)
-      .map((cat: any) => ({
-        id: String(cat.id),
-        name: String(cat.name),
-        active: cat.active ?? null,
-      }));
-
-    return {
-      id: Number(item.id),
-      name: String(item.name),
-      price: Number(item.price || 0),
-      active: item.active ?? null,
-      categories: categoriesForProduct,
-    };
-  });
-
-  setProducts(rows);
-}
-
-async function buildOrdersWithRelations(rawOrders: any[]): Promise<OrderView[]> {
+  async function buildOrdersWithRelations(rawOrders: any[]): Promise<OrderView[]> {
     const customerIds = rawOrders
       .map((o) => o.customer_id)
       .filter((id) => id !== null && id !== undefined);
@@ -5120,93 +5087,7 @@ async function buildOrdersWithRelations(rawOrders: any[]): Promise<OrderView[]> 
     setViewMode("setup");
   }
 
-async function deleteProduct(product: Product) {
-  if (!canEditSetup) {
-    setStatusMessage("You do not have permission to edit setup data");
-    return;
-  }
-
-  const confirmed = window.confirm(`Delete product "${product.name}"? This will also remove its category, modifier, recipe, and order item links where possible.`);
-  if (!confirmed) return;
-
-  const productId = Number(product.id);
-
-  const { error: recipeDeleteError } = await supabase
-    .from("product_recipes")
-    .delete()
-    .eq("product_id", productId);
-
-  if (recipeDeleteError) {
-    setStatusMessage(`Could not delete product recipes: ${recipeDeleteError.message}`);
-    return;
-  }
-
-  const { error: modifierDeleteError } = await supabase
-    .from("product_modifier_links")
-    .delete()
-    .eq("product_id", productId);
-
-  if (modifierDeleteError) {
-    setStatusMessage(`Could not delete product modifiers: ${modifierDeleteError.message}`);
-    return;
-  }
-
-  const { error: categoryDeleteError } = await supabase
-    .from("product_categories")
-    .delete()
-    .eq("product_id", productId);
-
-  if (categoryDeleteError) {
-    setStatusMessage(`Could not delete product categories: ${categoryDeleteError.message}`);
-    return;
-  }
-
-  const { error: orderItemsDetachError } = await supabase
-    .from("order_items")
-    .update({ product_id: null })
-    .eq("product_id", productId);
-
-  if (orderItemsDetachError) {
-    setStatusMessage(`Could not detach order items from product: ${orderItemsDetachError.message}`);
-    return;
-  }
-
-  const { error: movementDetachError } = await supabase
-    .from("inventory_movements")
-    .update({ product_id: null })
-    .eq("product_id", productId);
-
-  if (movementDetachError) {
-    setStatusMessage(`Could not detach inventory movements from product: ${movementDetachError.message}`);
-    return;
-  }
-
-  const { error: productDeleteError } = await supabase
-    .from("products")
-    .delete()
-    .eq("id", productId);
-
-  if (productDeleteError) {
-    setStatusMessage(`Could not delete product: ${productDeleteError.message}`);
-    return;
-  }
-
-  if (productForm.id === productId) {
-    setProductForm({
-      id: null,
-      name: "",
-      price: "",
-      active: true,
-      categoryIds: [],
-      modifierIds: [],
-    });
-  }
-
-  setStatusMessage("Product deleted");
-  await refreshAll();
-}
-
-function resetLineBuilder() {
+  function resetLineBuilder() {
     setSelectedProductForCart(null);
     setSelectedModifierIds([]);
     setLineNotes("");
@@ -5966,87 +5847,11 @@ function resetLineBuilder() {
                   ) : null}
 
                   <div className="mt-6">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">Select Category</div>
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-rose-700/70">
-                        Tap a category first
-                      </div>
-                    </div>
-
-                    <div className="-mx-1 overflow-x-auto pb-2">
-                      <div className="flex min-w-max gap-3 px-1">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPosCategoryId("all")}
-                          className={`rounded-2xl border px-5 py-3 text-sm font-semibold whitespace-nowrap transition ${
-                            selectedPosCategoryId === "all"
-                              ? "border-slate-900 bg-rose-500 text-white shadow-[0_12px_24px_rgba(0,0,0,0.18)]"
-                              : "border-rose-200 bg-white text-rose-700 hover:-translate-y-[1px] hover:bg-rose-50 hover:shadow-[0_8px_18px_rgba(0,0,0,0.08)]"
-                          }`}
-                        >
-                          All Items
-                          <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${selectedPosCategoryId === "all" ? "bg-white/20 text-white" : "bg-rose-50 text-rose-700"}`}>
-                            {products.filter((product) => product.active !== false).length}
-                          </span>
-                        </button>
-                        {posCategories.map((category) => {
-                          const categoryCount = products.filter(
-                            (product) =>
-                              product.active !== false &&
-                              product.categories.some((cat) => cat.id === category.id)
-                          ).length;
-
-                          return (
-                            <button
-                              key={category.id}
-                              type="button"
-                              onClick={() => setSelectedPosCategoryId(category.id)}
-                              className={`rounded-2xl border px-5 py-3 text-sm font-semibold whitespace-nowrap transition ${
-                                selectedPosCategoryId === category.id
-                                  ? "border-slate-900 bg-rose-500 text-white shadow-[0_12px_24px_rgba(0,0,0,0.18)]"
-                                  : "border-rose-200 bg-white text-rose-700 hover:-translate-y-[1px] hover:bg-rose-50 hover:shadow-[0_8px_18px_rgba(0,0,0,0.08)]"
-                              }`}
-                            >
-                              {category.name}
-                              <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${selectedPosCategoryId === category.id ? "bg-white/20 text-white" : "bg-rose-50 text-rose-700"}`}>
-                                {categoryCount}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="mt-4">
-                      <input
-                        value={posSearchTerm}
-                        onChange={(e) => setPosSearchTerm(e.target.value)}
-                        placeholder="Search item name..."
-                        className="w-full rounded-2xl border border-rose-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                      />
-                    </div>
-
-                    <div className="mb-3 mt-5 flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-slate-900">
-                          {selectedPosCategoryName}
-                        </div>
-                        <div className="mt-1 text-xs text-rose-700/70">
-                          {posSearchTerm.trim() ? `Search: ${posSearchTerm}` : "Showing available items"}
-                        </div>
-                      </div>
-                      <div className="text-xs text-rose-700/70">
-                        {filteredPosProducts.length} item{filteredPosProducts.length === 1 ? "" : "s"}
-                      </div>
-                    </div>
-
-                    {filteredPosProducts.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-6 text-sm text-rose-600">
-                        No items found in this category yet.
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                        {filteredPosProducts.map((product) => {
+                    <div className="mb-3 text-sm font-medium text-slate-900">Select Product</div>
+                    <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                      {products
+                        .filter((p) => p.active !== false)
+                        .map((product) => {
                           const selected = selectedProductForCart?.id === product.id;
 
                           return (
@@ -6083,8 +5888,7 @@ function resetLineBuilder() {
                             </button>
                           );
                         })}
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </section>
               </section>
@@ -9486,42 +9290,28 @@ function resetLineBuilder() {
                 </div>
               </section>
 
-              
-  <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
-    <h2 className="mb-4 text-2xl font-semibold">Existing Products</h2>
-    <div className="grid gap-3 md:grid-cols-2">
-      {products.map((product) => (
-        <div
-          key={product.id}
-          className="rounded-2xl border p-4 text-left"
-        >
-          <div className="font-semibold">{product.name}</div>
-          <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
-          <div className="mt-2 text-xs text-rose-700/70">
-            Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
-          </div>
-          <div className="text-xs text-rose-700/70">
-            Modifiers: {(productModifierMap[product.id] || []).length}
-          </div>
-          <div className="mt-4 flex gap-3">
-            <button
-              onClick={() => loadProductIntoForm(product)}
-              className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
-            >
-              Edit
-            </button>
-            <button
-              onClick={() => void deleteProduct(product)}
-              className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-600"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  </section>
-</section>
+              <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+                <h2 className="mb-4 text-2xl font-semibold">Existing Products</h2>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {products.map((product) => (
+                    <button
+                      key={product.id}
+                      onClick={() => loadProductIntoForm(product)}
+                      className="rounded-2xl border p-4 text-left"
+                    >
+                      <div className="font-semibold">{product.name}</div>
+                      <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
+                      <div className="mt-2 text-xs text-rose-700/70">
+                        Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
+                      </div>
+                      <div className="text-xs text-rose-700/70">
+                        Modifiers: {(productModifierMap[product.id] || []).length}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </section>
 
             <section className="space-y-6">
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
@@ -9579,37 +9369,56 @@ function resetLineBuilder() {
                         ...prev,
                         inventory_effect_item_id: nextItemId,
                         inventory_effect_unit: nextUnit,
+                        inventory_effect_quantity: nextItemId ? prev.inventory_effect_quantity : "",
                       }));
                     }}
                     className="w-full rounded-xl border px-3 py-2"
                   >
-                    <option value="">No stock effect</option>
+                    <option value="">
+                      {inventoryItems.filter((item) => item.active !== false).length > 0
+                        ? "No stock effect"
+                        : "No inventory items available - create inventory first"}
+                    </option>
                     {inventoryItems.filter((item) => item.active !== false).map((item) => (
                       <option key={item.id} value={String(item.id)}>
                         {item.item_name} ({item.unit})
                       </option>
                     ))}
                   </select>
+                  {inventoryItems.filter((item) => item.active !== false).length === 0 ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Create inventory items in Inventory/Stock first. Then you can link a modifier like Extra Shot to Coffee Beans, Milk, Syrup, Ice, Cups, or any other stock item.
+                    </div>
+                  ) : null}
                   <select
                     value={modifierForm.inventory_effect_unit}
                     onChange={(e) => setModifierForm((prev) => ({ ...prev, inventory_effect_unit: e.target.value }))}
-                    className="w-full rounded-xl border px-3 py-2"
+                    className={`w-full rounded-xl border px-3 py-2 ${!modifierForm.inventory_effect_item_id ? "bg-slate-50 text-slate-400" : ""}`}
                     disabled={!modifierForm.inventory_effect_item_id}
                   >
-                    {modifierEffectUnitOptions.map((unitOption) => (
-                      <option key={unitOption} value={unitOption}>
-                        {unitOption}
-                      </option>
-                    ))}
+                    {!modifierForm.inventory_effect_item_id ? (
+                      <option value="">Select stock item first</option>
+                    ) : (
+                      modifierEffectUnitOptions.map((unitOption) => (
+                        <option key={unitOption} value={unitOption}>
+                          {unitOption}
+                        </option>
+                      ))
+                    )}
                   </select>
                   <input
                     value={modifierForm.inventory_effect_quantity}
                     onChange={(e) => setModifierForm((prev) => ({ ...prev, inventory_effect_quantity: e.target.value }))}
-                    className="w-full rounded-xl border px-3 py-2"
-                    placeholder={`Extra stock quantity to deduct in ${modifierForm.inventory_effect_unit || modifierEffectUnitOptions[0] || "unit"}`}
+                    className={`w-full rounded-xl border px-3 py-2 ${!modifierForm.inventory_effect_item_id ? "bg-slate-50 text-slate-400" : ""}`}
+                    placeholder={
+                      modifierForm.inventory_effect_item_id
+                        ? `Extra stock quantity to deduct in ${modifierForm.inventory_effect_unit || modifierEffectUnitOptions[0] || "unit"}`
+                        : "Select stock item first to enter deduction quantity"
+                    }
+                    disabled={!modifierForm.inventory_effect_item_id}
                   />
                   <div className="text-xs text-rose-700/80">
-                    Example: Extra Shot -&gt; Coffee Beans -&gt; 8 g. Choose the deduction unit here. The app will convert it to the recipe stock unit automatically when the order is completed.
+                    Example: Extra Shot -&gt; Coffee Beans -&gt; 8 g. Choose the stock item first, then choose the deduction unit. The app will convert it to the recipe stock unit automatically when the order is completed.
                   </div>
                   <button
                     onClick={saveModifier}
