@@ -12,7 +12,7 @@ import {
 } from "../lib/print-helpers";
 
 type Category = {
-  id: number;
+  id: string;
   name: string;
   active: boolean | null;
 };
@@ -141,12 +141,12 @@ type ProductForm = {
   name: string;
   price: string;
   active: boolean;
-  categoryIds: number[];
+  categoryIds: string[];
   modifierIds: number[];
 };
 
 type CategoryForm = {
-  id: number | null;
+  id: string | null;
   name: string;
   active: boolean;
 };
@@ -2275,7 +2275,7 @@ const canEditSetup = currentRole === "admin";
 
     setCategories(
       (data || []).map((item: any) => ({
-        id: Number(item.id),
+        id: String(item.id),
         name: String(item.name),
         active: item.active ?? null,
       }))
@@ -2295,7 +2295,7 @@ const canEditSetup = currentRole === "admin";
 
     setModifierLibrary(
       (data || []).map((item: any) => ({
-        id: Number(item.id),
+        id: String(item.id),
         name: String(item.name),
         price_delta: Number(item.price_delta || 0),
         active: item.active ?? null,
@@ -2380,7 +2380,7 @@ const canEditSetup = currentRole === "admin";
 
     setSalesTaxes(
       (data || []).map((item: any) => ({
-        id: Number(item.id),
+        id: String(item.id),
         name: String(item.name),
         rate_percent: Number(item.rate_percent || 0),
         active: item.active ?? null,
@@ -2401,7 +2401,7 @@ const canEditSetup = currentRole === "admin";
 
     setPromotions(
       (data || []).map((item: any) => ({
-        id: Number(item.id),
+        id: String(item.id),
         name: String(item.name),
         start_at: String(item.start_at),
         end_at: String(item.end_at),
@@ -2438,10 +2438,10 @@ const canEditSetup = currentRole === "admin";
       return;
     }
 
-    const productToCategoryIds: Record<number, number[]> = {};
+    const productToCategoryIds: Record<number, string[]> = {};
     (productCategoryLinks || []).forEach((link: any) => {
       const productId = Number(link.product_id);
-      const categoryId = Number(link.category_id);
+      const categoryId = String(link.category_id);
       if (!productToCategoryIds[productId]) productToCategoryIds[productId] = [];
       productToCategoryIds[productId].push(categoryId);
     });
@@ -2456,7 +2456,7 @@ const canEditSetup = currentRole === "admin";
 
     setProductModifierMap(productToModifierIds);
 
-    const categoryMap = new Map<number, Category>();
+    const categoryMap = new Map<string, Category>();
     categories.forEach((cat) => categoryMap.set(cat.id, cat));
 
     const rows: Product[] = (productData || []).map((item: any) => {
