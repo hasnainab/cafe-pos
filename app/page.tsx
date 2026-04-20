@@ -1065,6 +1065,7 @@ const canEditSetup = currentRole === "admin";
 
   const [selectedProductForCart, setSelectedProductForCart] = useState<Product | null>(null);
   const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
+  const [posSearchTerm, setPosSearchTerm] = useState("");
   const [selectedQueueOrder, setSelectedQueueOrder] = useState<OrderView | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<number[]>([]);
   const [lineNotes, setLineNotes] = useState("");
@@ -1828,11 +1829,23 @@ const canEditSetup = currentRole === "admin";
 
   const filteredPosProducts = useMemo(() => {
     const activeProducts = products.filter((product) => product.active !== false);
-    if (selectedPosCategoryId === "all") return activeProducts;
-    return activeProducts.filter((product) =>
-      product.categories.some((category) => category.id === selectedPosCategoryId)
+    const categoryFiltered =
+      selectedPosCategoryId === "all"
+        ? activeProducts
+        : activeProducts.filter((product) =>
+            product.categories.some((category) => category.id === selectedPosCategoryId)
+          );
+
+    const query = posSearchTerm.trim().toLowerCase();
+    if (!query) return categoryFiltered;
+
+    return categoryFiltered.filter((product) =>
+      [product.name, ...(product.categories || []).map((category) => category.name)]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
     );
-  }, [products, selectedPosCategoryId]);
+  }, [products, selectedPosCategoryId, posSearchTerm]);
 
   const selectedPosCategoryName = useMemo(() => {
     if (selectedPosCategoryId === "all") return "All Items";
@@ -5953,38 +5966,74 @@ function resetLineBuilder() {
                   ) : null}
 
                   <div className="mt-6">
-                    <div className="mb-3 text-sm font-medium text-slate-900">Select Category</div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPosCategoryId("all")}
-                        className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
-                          selectedPosCategoryId === "all"
-                            ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-                            : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                        }`}
-                      >
-                        All Items
-                      </button>
-                      {posCategories.map((category) => (
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-slate-900">Select Category</div>
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-rose-700/70">
+                        Tap a category first
+                      </div>
+                    </div>
+
+                    <div className="-mx-1 overflow-x-auto pb-2">
+                      <div className="flex min-w-max gap-3 px-1">
                         <button
-                          key={category.id}
                           type="button"
-                          onClick={() => setSelectedPosCategoryId(category.id)}
-                          className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
-                            selectedPosCategoryId === category.id
-                              ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-                              : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                          onClick={() => setSelectedPosCategoryId("all")}
+                          className={`rounded-2xl border px-5 py-3 text-sm font-semibold whitespace-nowrap transition ${
+                            selectedPosCategoryId === "all"
+                              ? "border-slate-900 bg-rose-500 text-white shadow-[0_12px_24px_rgba(0,0,0,0.18)]"
+                              : "border-rose-200 bg-white text-rose-700 hover:-translate-y-[1px] hover:bg-rose-50 hover:shadow-[0_8px_18px_rgba(0,0,0,0.08)]"
                           }`}
                         >
-                          {category.name}
+                          All Items
+                          <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${selectedPosCategoryId === "all" ? "bg-white/20 text-white" : "bg-rose-50 text-rose-700"}`}>
+                            {products.filter((product) => product.active !== false).length}
+                          </span>
                         </button>
-                      ))}
+                        {posCategories.map((category) => {
+                          const categoryCount = products.filter(
+                            (product) =>
+                              product.active !== false &&
+                              product.categories.some((cat) => cat.id === category.id)
+                          ).length;
+
+                          return (
+                            <button
+                              key={category.id}
+                              type="button"
+                              onClick={() => setSelectedPosCategoryId(category.id)}
+                              className={`rounded-2xl border px-5 py-3 text-sm font-semibold whitespace-nowrap transition ${
+                                selectedPosCategoryId === category.id
+                                  ? "border-slate-900 bg-rose-500 text-white shadow-[0_12px_24px_rgba(0,0,0,0.18)]"
+                                  : "border-rose-200 bg-white text-rose-700 hover:-translate-y-[1px] hover:bg-rose-50 hover:shadow-[0_8px_18px_rgba(0,0,0,0.08)]"
+                              }`}
+                            >
+                              {category.name}
+                              <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${selectedPosCategoryId === category.id ? "bg-white/20 text-white" : "bg-rose-50 text-rose-700"}`}>
+                                {categoryCount}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <input
+                        value={posSearchTerm}
+                        onChange={(e) => setPosSearchTerm(e.target.value)}
+                        placeholder="Search item name..."
+                        className="w-full rounded-2xl border border-rose-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                      />
                     </div>
 
                     <div className="mb-3 mt-5 flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">
-                        {selectedPosCategoryName}
+                      <div>
+                        <div className="text-sm font-medium text-slate-900">
+                          {selectedPosCategoryName}
+                        </div>
+                        <div className="mt-1 text-xs text-rose-700/70">
+                          {posSearchTerm.trim() ? `Search: ${posSearchTerm}` : "Showing available items"}
+                        </div>
                       </div>
                       <div className="text-xs text-rose-700/70">
                         {filteredPosProducts.length} item{filteredPosProducts.length === 1 ? "" : "s"}
