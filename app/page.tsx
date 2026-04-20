@@ -2270,16 +2270,17 @@ const canEditSetup = currentRole === "admin";
 
     if (error) {
       setStatusMessage(`Could not load categories: ${error.message}`);
-      return;
+      return [] as Category[];
     }
 
-    setCategories(
-      (data || []).map((item: any) => ({
-        id: String(item.id),
-        name: String(item.name),
-        active: item.active ?? null,
-      }))
-    );
+    const rows: Category[] = (data || []).map((item: any) => ({
+      id: String(item.id),
+      name: String(item.name),
+      active: item.active ?? null,
+    }));
+
+    setCategories(rows);
+    return rows;
   }
 
   async function loadModifierLibrary() {
@@ -2295,7 +2296,7 @@ const canEditSetup = currentRole === "admin";
 
     setModifierLibrary(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         price_delta: Number(item.price_delta || 0),
         active: item.active ?? null,
@@ -2380,7 +2381,7 @@ const canEditSetup = currentRole === "admin";
 
     setSalesTaxes(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         rate_percent: Number(item.rate_percent || 0),
         active: item.active ?? null,
@@ -2401,7 +2402,7 @@ const canEditSetup = currentRole === "admin";
 
     setPromotions(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         start_at: String(item.start_at),
         end_at: String(item.end_at),
@@ -2411,7 +2412,7 @@ const canEditSetup = currentRole === "admin";
     );
   }
 
-  async function loadProducts() {
+  async function loadProducts(categoryRows?: Category[]) {
     const { data: productData, error: productError } = await supabase
       .from("products")
       .select("*")
@@ -2457,7 +2458,8 @@ const canEditSetup = currentRole === "admin";
     setProductModifierMap(productToModifierIds);
 
     const categoryMap = new Map<string, Category>();
-    categories.forEach((cat) => categoryMap.set(cat.id, cat));
+    const categorySource = categoryRows ?? categories;
+    categorySource.forEach((cat) => categoryMap.set(cat.id, cat));
 
     const rows: Product[] = (productData || []).map((item: any) => {
       const productId = Number(item.id);
@@ -3742,13 +3744,13 @@ const canEditSetup = currentRole === "admin";
 
   const refreshAll = useCallback(async () => {
     setStatusMessage("Refreshing...");
-    await loadCategories();
+    const loadedCategories = await loadCategories();
     await loadModifierLibrary();
     await loadModifierInventoryEffects();
     await loadSalesTaxes();
     await loadPaymentMethods();
     await loadPromotions();
-    await loadProducts();
+    await loadProducts(loadedCategories);
     await loadActiveOrders();
     await loadCompletedOrders();
     await loadReportData();
