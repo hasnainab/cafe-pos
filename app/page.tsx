@@ -4014,6 +4014,10 @@ const canEditSetup = currentRole === "admin";
             next.item_search = item.item_name;
             next.inventory_category_id = String(item.category_id || "");
             next.item_type = (item.item_type as "ingredient" | "finished_product") || "ingredient";
+            if (normalizeMeasureUnit(next.packing_qty_unit) === "eaches") {
+              next.one_unit_size_number = "1";
+              next.one_unit_size_unit = "eaches";
+            }
           }
         }
 
@@ -4022,6 +4026,11 @@ const canEditSetup = currentRole === "admin";
           if (vendor) {
             next.vendor_search = vendor.vendor_name;
           }
+        }
+
+        if (normalizeMeasureUnit(next.packing_qty_unit) === "eaches") {
+          next.one_unit_size_number = "1";
+          next.one_unit_size_unit = "eaches";
         }
 
         return next;
@@ -4080,20 +4089,18 @@ const canEditSetup = currentRole === "admin";
 
   function getTotalBaseQuantity(row: StockIntakeRowForm) {
     const packingUnit = normalizeMeasureUnit(row.packing_qty_unit);
-    const oneUnit = normalizeMeasureUnit(row.one_unit_size_unit);
     const packingQty = Number(row.packing_qty_number || 0);
     const packs = Number(row.number_of_packs || 0);
-    const oneSize = Number(row.one_unit_size_number || 0);
 
     if (packingUnit === "eaches") {
-      return packingQty * packs * oneSize;
+      return packingQty * packs;
     }
 
     return packingQty * packs * measureFactorToBase(packingUnit);
   }
 
   function getTotalCostValue(row: StockIntakeRowForm) {
-    return Number(row.price || 0) * Number(row.number_of_packs || 0);
+    return Number(row.price || 0);
   }
 
   function getPricePerBaseLargeUnit(row: StockIntakeRowForm) {
