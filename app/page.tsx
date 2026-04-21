@@ -4170,12 +4170,7 @@ const canEditSetup = currentRole === "admin";
           String(row.item_search || "").trim() !== "" ||
           String(row.new_item_name || "").trim() !== "" ||
           String(row.inventory_item_id || "").trim() !== "";
-        const hasVendor =
-          Boolean(stockIntakeForm.vendor_id) ||
-          String(row.vendor_search || "").trim() !== "" ||
-          String(row.new_vendor_name || "").trim() !== "" ||
-          String(row.vendor_id || "").trim() !== "";
-        return hasItem && hasVendor;
+        return hasItem;
       });
       if (validRows.length === 0) {
         setStatusMessage("Add at least one stock intake item");
@@ -4188,20 +4183,29 @@ const canEditSetup = currentRole === "admin";
         if (Number(row.packing_qty_number || 0) <= 0) throw new Error("Enter packing quantity for each stock intake row");
       }
 
-      let vendorIdForShipment = stockIntakeForm.vendor_id ? Number(stockIntakeForm.vendor_id) : null;
+      let vendorIdForShipment: number | null = null;
 
-      if (!vendorIdForShipment) {
-        const firstRowWithVendor = validRows.find(
-          (row) => row.vendor_id || String(row.new_vendor_name || "").trim()
-        );
+      const firstRowWithVendor = validRows.find(
+        (row) => row.vendor_id || String(row.new_vendor_name || "").trim()
+      );
 
-        if (firstRowWithVendor?.vendor_id) {
-          vendorIdForShipment = Number(firstRowWithVendor.vendor_id);
-        } else if (firstRowWithVendor && String(firstRowWithVendor.new_vendor_name || "").trim()) {
+      if (firstRowWithVendor?.vendor_id) {
+        vendorIdForShipment = Number(firstRowWithVendor.vendor_id);
+      } else if (firstRowWithVendor && String(firstRowWithVendor.new_vendor_name || "").trim()) {
+        const vendorName = String(firstRowWithVendor.new_vendor_name || "").trim();
+        const { data: existingVendor } = await supabase
+          .from("vendors")
+          .select("id")
+          .ilike("vendor_name", vendorName)
+          .maybeSingle();
+
+        if (existingVendor?.id) {
+          vendorIdForShipment = Number(existingVendor.id);
+        } else {
           const { data: createdHeaderVendor, error: createdHeaderVendorError } = await supabase
             .from("vendors")
             .insert({
-              vendor_name: String(firstRowWithVendor.new_vendor_name || "").trim(),
+              vendor_name: vendorName,
               active: true,
             })
             .select("id")
@@ -4216,7 +4220,31 @@ const canEditSetup = currentRole === "admin";
       }
 
       if (!vendorIdForShipment) {
-        throw new Error("Select a vendor in the stock intake header or on at least one intake row");
+        const unspecifiedVendorName = "Unspecified Vendor";
+        const { data: existingFallbackVendor } = await supabase
+          .from("vendors")
+          .select("id")
+          .eq("vendor_name", unspecifiedVendorName)
+          .maybeSingle();
+
+        if (existingFallbackVendor?.id) {
+          vendorIdForShipment = Number(existingFallbackVendor.id);
+        } else {
+          const { data: createdFallbackVendor, error: createdFallbackVendorError } = await supabase
+            .from("vendors")
+            .insert({
+              vendor_name: unspecifiedVendorName,
+              active: true,
+            })
+            .select("id")
+            .single();
+
+          if (createdFallbackVendorError) {
+            throw new Error(`Could not create fallback vendor: ${createdFallbackVendorError.message}`);
+          }
+
+          vendorIdForShipment = Number(createdFallbackVendor.id);
+        }
       }
 
       const shipmentTotal = validRows.reduce((sum, row) => sum + getTotalCostValue(row), 0);
@@ -7932,24 +7960,10 @@ const canEditSetup = currentRole === "admin";
             <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm xl:col-span-2">
               <h2 className="mb-2 text-2xl font-semibold">Stock Intake</h2>
               <p className="mb-4 text-xs text-rose-700/70">
-                Search items and vendors by any part of the name. If no result appears, create them inline in the same row.
+                Search items by any part of the name. Vendor is optional. If no result appears, create the item inline in the same row.
               </p>
 
-              <div className="mb-4 grid gap-3 md:grid-cols-4">
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Default Vendor</label>
-                  <select
-                    value={stockIntakeForm.vendor_id}
-                    onChange={(e) => setStockIntakeForm((p) => ({ ...p, vendor_id: e.target.value }))}
-                    className="w-full rounded-xl border px-3 py-2 text-xs"
-                  >
-                    <option value="">No default vendor</option>
-                    {vendors.map((vendor) => (
-                      <option key={vendor.id} value={String(vendor.id)}>{vendor.vendor_name}</option>
-                    ))}
-                  </select>
-                </div>
-
+              <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Delivery Date</label>
                   <input
