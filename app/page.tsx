@@ -1366,6 +1366,7 @@ const canEditSetup = currentRole === "admin";
   );
 
   const [productRecipes, setProductRecipes] = useState<ProductRecipeDbRow[]>([]);
+  const [allProductRecipes, setAllProductRecipes] = useState<ProductRecipeDbRow[]>([]);
   const [selectedRecipeProductId, setSelectedRecipeProductId] = useState<string>("");
   const [recipePricingTargetMarginInput, setRecipePricingTargetMarginInput] = useState("70");
   const [selectedRecipePricingProductId, setSelectedRecipePricingProductId] = useState<string>("");
@@ -1609,6 +1610,29 @@ const canEditSetup = currentRole === "admin";
     setRecipeEditorRows(rows.length > 0 ? rows : [makeRecipeEditorRow(1)]);
   }
 
+  async function loadAllProductRecipes() {
+    const { data, error } = await supabase
+      .from("product_recipes")
+      .select("id, product_id, inventory_item_id, quantity_required, wastage_percent")
+      .order("product_id", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (error) {
+      setStatusMessage(`Could not load all product recipes: ${error.message}`);
+      return;
+    }
+
+    setAllProductRecipes(
+      ((data || []) as any[]).map((row: any) => ({
+        id: Number(row.id),
+        product_id: Number(row.product_id),
+        inventory_item_id: Number(row.inventory_item_id),
+        quantity_required: Number(row.quantity_required || 0),
+        wastage_percent: Number(row.wastage_percent || 0),
+      }))
+    );
+  }
+
   async function saveProductRecipe() {
     try {
       const productId = Number(selectedRecipeProductId || 0);
@@ -1674,6 +1698,7 @@ const canEditSetup = currentRole === "admin";
 
       setStatusMessage("Product recipe saved");
       await loadProductRecipes(productId);
+      await loadAllProductRecipes();
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not save recipe");
     }
@@ -3772,6 +3797,7 @@ const canEditSetup = currentRole === "admin";
     await loadInventoryBatches();
     await loadStockAudits();
     await loadStockAuditLines();
+    await loadAllProductRecipes();
     setStatusMessage("Ready");
   }, []);
 
@@ -7265,7 +7291,7 @@ const canEditSetup = currentRole === "admin";
           const recipeRows = products
             .filter((product) => product.active !== false)
             .map((product) => {
-              const recipeLines = productRecipes.filter((line) => Number(line.product_id) === Number(product.id));
+              const recipeLines = allProductRecipes.filter((line) => Number(line.product_id) === Number(product.id));
               let latestCost = 0;
               let averageCost = 0;
               const ingredientDetails = recipeLines.map((line) => {
