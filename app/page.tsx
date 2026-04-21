@@ -3512,7 +3512,6 @@ const canEditSetup = currentRole === "admin";
         invoice_number: shipmentForm.invoice_number.trim() || null,
         delivery_date: shipmentForm.delivery_date,
         notes: shipmentForm.notes.trim() || null,
-        created_by: staffProfile?.id || null,
       })
       .select("id")
       .single();
@@ -4265,7 +4264,6 @@ const canEditSetup = currentRole === "admin";
             amountPaidToday < shipmentTotal ? "partially_paid" : "paid",
           fully_paid_at: shipmentTotal > 0 && amountPaidToday >= shipmentTotal ? new Date().toISOString() : null,
           notes: stockIntakeForm.notes || null,
-          created_by: staffProfile?.id || null,
         })
         .select("id")
         .single();
