@@ -572,6 +572,14 @@ function formatSmallCurrency(value: number) {
   return `Rs ${num.toFixed(4)}`;
 }
 
+function formatConvertedCurrency(value: number) {
+  const num = Number(value || 0);
+  if (num === 0) return "Rs 0";
+  if (Math.abs(num) < 1) return `Rs ${num.toFixed(4)}`;
+  if (Number.isInteger(num)) return `Rs ${num.toFixed(0)}`;
+  return `Rs ${num.toFixed(2)}`;
+}
+
 function formatTime(value: string | null | undefined) {
   if (!value) return "-";
   return new Date(value).toLocaleString();
@@ -8159,12 +8167,12 @@ const canEditSetup = currentRole === "admin";
 
                         <div>
                           <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">{getLargeUnitLabel(row)}</label>
-                          <div className="rounded-xl border bg-white px-3 py-2 text-xs font-medium">{formatCurrency(pricePerLarge)}</div>
+                          <div className="rounded-xl border bg-white px-3 py-2 text-xs font-medium">{formatConvertedCurrency(pricePerLarge)}</div>
                         </div>
 
                         <div>
                           <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">{getSmallUnitLabel(row)}</label>
-                          <div className="rounded-xl border bg-white px-3 py-2 text-xs font-medium">{formatCurrency(pricePerSmall)}</div>
+                          <div className="rounded-xl border bg-white px-3 py-2 text-xs font-medium">{formatConvertedCurrency(pricePerSmall)}</div>
                         </div>
 
                         <div>
@@ -9369,56 +9377,37 @@ const canEditSetup = currentRole === "admin";
                         ...prev,
                         inventory_effect_item_id: nextItemId,
                         inventory_effect_unit: nextUnit,
-                        inventory_effect_quantity: nextItemId ? prev.inventory_effect_quantity : "",
                       }));
                     }}
                     className="w-full rounded-xl border px-3 py-2"
                   >
-                    <option value="">
-                      {inventoryItems.filter((item) => item.active !== false).length > 0
-                        ? "No stock effect"
-                        : "No inventory items available - create inventory first"}
-                    </option>
+                    <option value="">No stock effect</option>
                     {inventoryItems.filter((item) => item.active !== false).map((item) => (
                       <option key={item.id} value={String(item.id)}>
                         {item.item_name} ({item.unit})
                       </option>
                     ))}
                   </select>
-                  {inventoryItems.filter((item) => item.active !== false).length === 0 ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Create inventory items in Inventory/Stock first. Then you can link a modifier like Extra Shot to Coffee Beans, Milk, Syrup, Ice, Cups, or any other stock item.
-                    </div>
-                  ) : null}
                   <select
                     value={modifierForm.inventory_effect_unit}
                     onChange={(e) => setModifierForm((prev) => ({ ...prev, inventory_effect_unit: e.target.value }))}
-                    className={`w-full rounded-xl border px-3 py-2 ${!modifierForm.inventory_effect_item_id ? "bg-slate-50 text-slate-400" : ""}`}
+                    className="w-full rounded-xl border px-3 py-2"
                     disabled={!modifierForm.inventory_effect_item_id}
                   >
-                    {!modifierForm.inventory_effect_item_id ? (
-                      <option value="">Select stock item first</option>
-                    ) : (
-                      modifierEffectUnitOptions.map((unitOption) => (
-                        <option key={unitOption} value={unitOption}>
-                          {unitOption}
-                        </option>
-                      ))
-                    )}
+                    {modifierEffectUnitOptions.map((unitOption) => (
+                      <option key={unitOption} value={unitOption}>
+                        {unitOption}
+                      </option>
+                    ))}
                   </select>
                   <input
                     value={modifierForm.inventory_effect_quantity}
                     onChange={(e) => setModifierForm((prev) => ({ ...prev, inventory_effect_quantity: e.target.value }))}
-                    className={`w-full rounded-xl border px-3 py-2 ${!modifierForm.inventory_effect_item_id ? "bg-slate-50 text-slate-400" : ""}`}
-                    placeholder={
-                      modifierForm.inventory_effect_item_id
-                        ? `Extra stock quantity to deduct in ${modifierForm.inventory_effect_unit || modifierEffectUnitOptions[0] || "unit"}`
-                        : "Select stock item first to enter deduction quantity"
-                    }
-                    disabled={!modifierForm.inventory_effect_item_id}
+                    className="w-full rounded-xl border px-3 py-2"
+                    placeholder={`Extra stock quantity to deduct in ${modifierForm.inventory_effect_unit || modifierEffectUnitOptions[0] || "unit"}`}
                   />
                   <div className="text-xs text-rose-700/80">
-                    Example: Extra Shot -&gt; Coffee Beans -&gt; 8 g. Choose the stock item first, then choose the deduction unit. The app will convert it to the recipe stock unit automatically when the order is completed.
+                    Example: Extra Shot -&gt; Coffee Beans -&gt; 8 g. Choose the deduction unit here. The app will convert it to the recipe stock unit automatically when the order is completed.
                   </div>
                   <button
                     onClick={saveModifier}
