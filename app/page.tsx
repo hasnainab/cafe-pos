@@ -1007,13 +1007,17 @@ useEffect(() => {
 
 const authLoading = !authChecked || !staffProfile;
 const currentRole = normalizeRole(staffProfile?.role);
-const canViewCustomers = currentRole === "admin" || currentRole === "manager";
-const canViewReports = currentRole === "admin" || currentRole === "manager";
-const canViewSetup = currentRole === "admin";
-const canViewInventory = currentRole === "admin";
-const canViewRecipes = currentRole === "admin";
-const canEditCustomerBonus = currentRole === "admin" || currentRole === "manager";
-const canEditSetup = currentRole === "admin";
+const isAdmin = currentRole === "admin";
+const isManager = currentRole === "manager";
+const isCashier = currentRole === "cashier";
+const canViewCustomers = isAdmin || isManager;
+const canViewReports = isAdmin || isManager;
+const canViewSetup = isAdmin;
+const canViewInventory = isAdmin || isManager;
+const canViewRecipes = isAdmin;
+const canViewProfitability = isAdmin || isManager;
+const canEditCustomerBonus = isAdmin || isManager;
+const canEditSetup = isAdmin;
 
   const [viewMode, setViewMode] = useState<ViewMode>("pos");
 
@@ -1131,6 +1135,12 @@ const canEditSetup = currentRole === "admin";
       return;
     }
 
+    if (viewMode === "profitability" && !canViewProfitability) {
+      setViewMode("pos");
+      setStatusMessage("Profitability is restricted for your role");
+      return;
+    }
+
     if (viewMode === "recipes" && !canViewRecipes) {
       setViewMode("pos");
       setStatusMessage("Recipes is restricted for your role");
@@ -1143,6 +1153,7 @@ const canEditSetup = currentRole === "admin";
     canViewCustomers,
     canViewSetup,
     canViewInventory,
+    canViewProfitability,
     canViewRecipes,
   ]);
 
@@ -5873,7 +5884,7 @@ const canEditSetup = currentRole === "admin";
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
                 {canViewInventory ? navButton("audit", "Stock Audit") : null}
                 {navButton("history", "History")}
-                {navButton("profitability", "COGS/Profit")}
+                {canViewProfitability ? navButton("profitability", "COGS/Profit") : null}
                 {canViewCustomers ? navButton("customers", "CRM & Loyalty") : null}
                 {canViewCustomers ? navButton("campaigns", "WhatsApp Campaigns") : null}
                 {canViewReports ? navButton("reports", "Reports") : null}
@@ -5883,11 +5894,19 @@ const canEditSetup = currentRole === "admin";
                 {canViewSetup ? navButton("setup", "Setup") : null}
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
               </div>
-              {currentRole === "cashier" ? (
+              {isCashier ? (
                 <p className="text-xs text-rose-700/60">
                   Cashier access: POS, Active, and History only
                 </p>
-              ) : null}
+              ) : isManager ? (
+                <p className="text-xs text-rose-700/60">
+                  Manager access: operations, inventory, reports, and customers. Setup and recipes stay admin only.
+                </p>
+              ) : (
+                <p className="text-xs text-rose-700/60">
+                  Admin access: full control across POS, setup, inventory, recipes, reports, and customers.
+                </p>
+              )}
             </div>
           </div>
         </section>
