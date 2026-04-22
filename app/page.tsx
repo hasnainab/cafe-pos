@@ -1028,6 +1028,8 @@ const canEditSetup = currentRole === "admin";
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
   const [cashReceivedInput, setCashReceivedInput] = useState("");
 
@@ -2008,6 +2010,60 @@ const canEditSetup = currentRole === "admin";
       return name.includes(q) || phone.includes(q);
     });
   }, [customerList, customersSearch]);
+
+  const posCategoryOptions = useMemo(() => {
+    return categories.filter((category) => category.active !== false);
+  }, [categories]);
+
+  const filteredPosProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+
+    return products
+      .filter((product) => product.active !== false)
+      .filter((product) => {
+        if (selectedPosCategoryId === "all") return true;
+        return product.categories.some((category) => category.id === selectedPosCategoryId);
+      })
+      .filter((product) => {
+        if (!q) return true;
+        const productName = String(product.name || "").toLowerCase();
+        const categoryNames = product.categories.map((category) => String(category.name || "").toLowerCase()).join(" ");
+        return productName.includes(q) || categoryNames.includes(q);
+      });
+  }, [products, selectedPosCategoryId, productSearch]);
+
+  const groupedPosSections = useMemo(() => {
+    const sections: Array<{ id: string; name: string; products: Product[] }> = [];
+
+    if (selectedPosCategoryId === "all") {
+      posCategoryOptions.forEach((category) => {
+        const sectionProducts = filteredPosProducts.filter((product) =>
+          product.categories.some((productCategory) => productCategory.id === category.id)
+        );
+        if (sectionProducts.length > 0) {
+          sections.push({ id: category.id, name: category.name, products: sectionProducts });
+        }
+      });
+
+      const uncategorizedProducts = filteredPosProducts.filter(
+        (product) => !product.categories || product.categories.length === 0
+      );
+      if (uncategorizedProducts.length > 0) {
+        sections.push({ id: "uncategorized", name: "Uncategorized", products: uncategorizedProducts });
+      }
+
+      return sections;
+    }
+
+    const activeCategory = posCategoryOptions.find((category) => category.id === selectedPosCategoryId);
+    return [
+      {
+        id: activeCategory?.id || selectedPosCategoryId,
+        name: activeCategory?.name || "Selected Category",
+        products: filteredPosProducts,
+      },
+    ];
+  }, [filteredPosProducts, posCategoryOptions, selectedPosCategoryId]);
 
 
   function exportCustomerContactsCsv(rows: CustomerSummary[], mode: "all" | "filtered") {
@@ -5935,47 +5991,102 @@ const canEditSetup = currentRole === "admin";
 
                   <div className="mt-6">
                     <div className="mb-3 text-sm font-medium text-slate-900">Select Product</div>
-                    <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                      {products
-                        .filter((p) => p.active !== false)
-                        .map((product) => {
-                          const selected = selectedProductForCart?.id === product.id;
 
-                          return (
-                            <button
-                              key={product.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedProductForCart(product);
-                                setSelectedModifierIds([]);
-                              }}
-                              className={`min-h-[92px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
-                                selected
-                                  ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-                                  : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
-                              }`}
-                            >
-                              <div className="min-h-[34px] text-[13px] font-semibold leading-4">
-                                {product.name}
-                              </div>
-                              <div
-                                className={`mt-1 text-xs font-medium ${
-                                  selected ? "text-rose-100" : "text-rose-700"
-                                }`}
-                              >
-                                {formatCurrency(product.price)}
-                              </div>
-                              <div
-                                className={`mt-1 text-[10px] leading-3 ${
-                                  selected ? "text-rose-100/80" : "text-rose-500/80"
-                                }`}
-                              >
-                                {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
-                              </div>
-                            </button>
-                          );
-                        })}
+                    <div className="mb-3">
+                      <input
+                        value={productSearch}
+                        onChange={(e) => setProductSearch(e.target.value)}
+                        placeholder="Search products by name or category"
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                      />
                     </div>
+
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPosCategoryId("all")}
+                        className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                          selectedPosCategoryId === "all"
+                            ? "border-slate-900 bg-rose-500 text-white"
+                            : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                        }`}
+                      >
+                        All Products
+                      </button>
+                      {posCategoryOptions.map((category) => (
+                        <button
+                          key={category.id}
+                          type="button"
+                          onClick={() => setSelectedPosCategoryId(category.id)}
+                          className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                            selectedPosCategoryId === category.id
+                              ? "border-slate-900 bg-rose-500 text-white"
+                              : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                          }`}
+                        >
+                          {category.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    {groupedPosSections.length === 0 || filteredPosProducts.length === 0 ? (
+                      <div className="mt-3 rounded-xl border border-dashed border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
+                        No products match this category or search.
+                      </div>
+                    ) : (
+                      <div className="space-y-5">
+                        {groupedPosSections.map((section) => (
+                          <div key={section.id} className="rounded-2xl border border-rose-100 bg-rose-50/40 p-3">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <h3 className="text-sm font-semibold text-slate-900">{section.name}</h3>
+                                <div className="text-[11px] text-rose-700/70">{section.products.length} product{section.products.length === 1 ? "" : "s"}</div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                              {section.products.map((product) => {
+                                const selected = selectedProductForCart?.id === product.id;
+
+                                return (
+                                  <button
+                                    key={product.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedProductForCart(product);
+                                      setSelectedModifierIds([]);
+                                    }}
+                                    className={`min-h-[92px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
+                                      selected
+                                        ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+                                        : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
+                                    }`}
+                                  >
+                                    <div className="min-h-[34px] text-[13px] font-semibold leading-4">
+                                      {product.name}
+                                    </div>
+                                    <div
+                                      className={`mt-1 text-xs font-medium ${
+                                        selected ? "text-rose-100" : "text-rose-700"
+                                      }`}
+                                    >
+                                      {formatCurrency(product.price)}
+                                    </div>
+                                    <div
+                                      className={`mt-1 text-[10px] leading-3 ${
+                                        selected ? "text-rose-100/80" : "text-rose-500/80"
+                                      }`}
+                                    >
+                                      {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </section>
               </section>
