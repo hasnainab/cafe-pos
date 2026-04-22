@@ -2327,13 +2327,13 @@ const canEditSetup = currentRole === "admin";
     }
 
     setModifierLibrary(
-  (data || []).map((item: any) => ({
-    id: String(item.id),
-    name: String(item.name),
-    price_delta: Number(item.price_delta || 0),
-    active: item.active ?? null,
-  }))
-);
+      (data || []).map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name),
+        price_delta: Number(item.price_delta || 0),
+        active: item.active ?? null,
+      }))
+    );
   }
 
   async function loadModifierInventoryEffects() {
