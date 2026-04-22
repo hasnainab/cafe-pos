@@ -1028,8 +1028,6 @@ const canEditSetup = currentRole === "admin";
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
-  const [productSearch, setProductSearch] = useState("");
-  const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
   const [cashReceivedInput, setCashReceivedInput] = useState("");
 
@@ -2011,27 +2009,6 @@ const canEditSetup = currentRole === "admin";
     });
   }, [customerList, customersSearch]);
 
-  const posCategoryOptions = useMemo(() => {
-    return categories.filter((category) => category.active !== false);
-  }, [categories]);
-
-  const filteredPosProducts = useMemo(() => {
-    const q = productSearch.trim().toLowerCase();
-
-    return products
-      .filter((product) => product.active !== false)
-      .filter((product) => {
-        if (selectedPosCategoryId === "all") return true;
-        return product.categories.some((category) => category.id === selectedPosCategoryId);
-      })
-      .filter((product) => {
-        if (!q) return true;
-        const productName = String(product.name || "").toLowerCase();
-        const categoryNames = product.categories.map((category) => String(category.name || "").toLowerCase()).join(" ");
-        return productName.includes(q) || categoryNames.includes(q);
-      });
-  }, [products, selectedPosCategoryId, productSearch]);
-
 
   function exportCustomerContactsCsv(rows: CustomerSummary[], mode: "all" | "filtered") {
     const exportRows = rows.filter((row) => String(row.customer.phone || "").trim() !== "");
@@ -2512,8 +2489,23 @@ const canEditSetup = currentRole === "admin";
 
     setProductModifierMap(productToModifierIds);
 
+    const { data: categoryData, error: categoryError } = await supabase
+      .from("categories")
+      .select("*");
+
+    if (categoryError) {
+      setStatusMessage(`Could not load categories for products: ${categoryError.message}`);
+      return;
+    }
+
     const categoryMap = new Map<string, Category>();
-    categories.forEach((cat) => categoryMap.set(cat.id, cat));
+    (categoryData || []).forEach((cat: any) => {
+      categoryMap.set(String(cat.id), {
+        id: String(cat.id),
+        name: String(cat.name),
+        active: cat.active ?? null,
+      });
+    });
 
     const rows: Product[] = (productData || []).map((item: any) => {
       const productId = Number(item.id);
@@ -5943,89 +5935,47 @@ const canEditSetup = currentRole === "admin";
 
                   <div className="mt-6">
                     <div className="mb-3 text-sm font-medium text-slate-900">Select Product</div>
-
-                    <div className="mb-3">
-                      <input
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                        placeholder="Search products by name or category"
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs outline-none transition focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                      />
-                    </div>
-
-                    <div className="mb-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPosCategoryId("all")}
-                        className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
-                          selectedPosCategoryId === "all"
-                            ? "border-slate-900 bg-rose-500 text-white"
-                            : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                        }`}
-                      >
-                        All Products
-                      </button>
-                      {posCategoryOptions.map((category) => (
-                        <button
-                          key={category.id}
-                          type="button"
-                          onClick={() => setSelectedPosCategoryId(category.id)}
-                          className={`rounded-xl border px-3 py-2 text-xs font-medium transition ${
-                            selectedPosCategoryId === category.id
-                              ? "border-slate-900 bg-rose-500 text-white"
-                              : "border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                          }`}
-                        >
-                          {category.name}
-                        </button>
-                      ))}
-                    </div>
-
                     <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                      {filteredPosProducts.map((product) => {
-                        const selected = selectedProductForCart?.id === product.id;
+                      {products
+                        .filter((p) => p.active !== false)
+                        .map((product) => {
+                          const selected = selectedProductForCart?.id === product.id;
 
-                        return (
-                          <button
-                            key={product.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedProductForCart(product);
-                              setSelectedModifierIds([]);
-                            }}
-                            className={`min-h-[92px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
-                              selected
-                                ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-                                : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
-                            }`}
-                          >
-                            <div className="min-h-[34px] text-[13px] font-semibold leading-4">
-                              {product.name}
-                            </div>
-                            <div
-                              className={`mt-1 text-xs font-medium ${
-                                selected ? "text-rose-100" : "text-rose-700"
+                          return (
+                            <button
+                              key={product.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedProductForCart(product);
+                                setSelectedModifierIds([]);
+                              }}
+                              className={`min-h-[92px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
+                                selected
+                                  ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+                                  : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
                               }`}
                             >
-                              {formatCurrency(product.price)}
-                            </div>
-                            <div
-                              className={`mt-1 text-[10px] leading-3 ${
-                                selected ? "text-rose-100/80" : "text-rose-500/80"
-                              }`}
-                            >
-                              {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
-                            </div>
-                          </button>
-                        );
-                      })}
+                              <div className="min-h-[34px] text-[13px] font-semibold leading-4">
+                                {product.name}
+                              </div>
+                              <div
+                                className={`mt-1 text-xs font-medium ${
+                                  selected ? "text-rose-100" : "text-rose-700"
+                                }`}
+                              >
+                                {formatCurrency(product.price)}
+                              </div>
+                              <div
+                                className={`mt-1 text-[10px] leading-3 ${
+                                  selected ? "text-rose-100/80" : "text-rose-500/80"
+                                }`}
+                              >
+                                {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
+                              </div>
+                            </button>
+                          );
+                        })}
                     </div>
-
-                    {filteredPosProducts.length === 0 ? (
-                      <div className="mt-3 rounded-xl border border-dashed border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
-                        No products match this category or search.
-                      </div>
-                    ) : null}
                   </div>
                 </section>
               </section>
