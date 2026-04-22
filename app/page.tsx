@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { supabaseAuth } from "../lib/auth";
 import type { StaffProfile } from "../lib/auth";
@@ -469,6 +470,23 @@ type VendorPaymentForm = {
   payment_method: string;
   reference_number: string;
   notes: string;
+};
+
+type StaffUserRow = {
+  id: string;
+  full_name: string | null;
+  role: AllowedRole;
+  is_active: boolean | null;
+  created_at: string | null;
+};
+
+type StaffUserForm = {
+  id: string | null;
+  full_name: string;
+  email: string;
+  password: string;
+  role: AllowedRole;
+  is_active: boolean;
 };
 
 type AllowedRole = "admin" | "manager" | "cashier";
@@ -1007,17 +1025,13 @@ useEffect(() => {
 
 const authLoading = !authChecked || !staffProfile;
 const currentRole = normalizeRole(staffProfile?.role);
-const isAdmin = currentRole === "admin";
-const isManager = currentRole === "manager";
-const isCashier = currentRole === "cashier";
-const canViewCustomers = isAdmin || isManager;
-const canViewReports = isAdmin || isManager;
-const canViewSetup = isAdmin;
-const canViewInventory = isAdmin || isManager;
-const canViewRecipes = isAdmin;
-const canViewProfitability = isAdmin || isManager;
-const canEditCustomerBonus = isAdmin || isManager;
-const canEditSetup = isAdmin;
+const canViewCustomers = currentRole === "admin" || currentRole === "manager";
+const canViewReports = currentRole === "admin" || currentRole === "manager";
+const canViewSetup = currentRole === "admin";
+const canViewInventory = currentRole === "admin";
+const canViewRecipes = currentRole === "admin";
+const canEditCustomerBonus = currentRole === "admin" || currentRole === "manager";
+const canEditSetup = currentRole === "admin";
 
   const [viewMode, setViewMode] = useState<ViewMode>("pos");
 
@@ -1101,6 +1115,15 @@ const canEditSetup = isAdmin;
   const [selectedCustomerOrders, setSelectedCustomerOrders] = useState<OrderView[]>([]);
   const [selectedCustomerLedger, setSelectedCustomerLedger] = useState<CustomerLedgerEntry[]>([]);
   const [selectedCustomerBonusInput, setSelectedCustomerBonusInput] = useState("");
+  const [staffUsers, setStaffUsers] = useState<StaffUserRow[]>([]);
+  const [staffUserForm, setStaffUserForm] = useState<StaffUserForm>({
+    id: null,
+    full_name: "",
+    email: "",
+    password: "",
+    role: "cashier",
+    is_active: true,
+  });
 
   useEffect(() => {
     if (!authChecked || !staffProfile) return;
@@ -1135,12 +1158,6 @@ const canEditSetup = isAdmin;
       return;
     }
 
-    if (viewMode === "profitability" && !canViewProfitability) {
-      setViewMode("pos");
-      setStatusMessage("Profitability is restricted for your role");
-      return;
-    }
-
     if (viewMode === "recipes" && !canViewRecipes) {
       setViewMode("pos");
       setStatusMessage("Recipes is restricted for your role");
@@ -1153,7 +1170,6 @@ const canEditSetup = isAdmin;
     canViewCustomers,
     canViewSetup,
     canViewInventory,
-    canViewProfitability,
     canViewRecipes,
   ]);
 
@@ -2423,6 +2439,152 @@ const canEditSetup = isAdmin;
     );
   }
 
+
+  async function loadStaffUsers() {
+    const { data, error } = await supabase
+      .from("staff_profiles")
+      .select("id, full_name, role, is_active, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setStatusMessage(`Could not load staff users: ${error.message}`);
+      return;
+    }
+
+    setStaffUsers(
+      ((data || []) as any[]).map((row: any) => ({
+        id: String(row.id),
+        full_name: row.full_name ?? null,
+        role: normalizeRole(row.role),
+        is_active: row.is_active ?? null,
+        created_at: row.created_at ?? null,
+      }))
+    );
+  }
+
+  function loadStaffUserIntoForm(user: StaffUserRow) {
+    setStaffUserForm({
+      id: user.id,
+      full_name: user.full_name || "",
+      email: "",
+      password: "",
+      role: normalizeRole(user.role),
+      is_active: user.is_active !== false,
+    });
+  }
+
+  function resetStaffUserForm() {
+    setStaffUserForm({
+      id: null,
+      full_name: "",
+      email: "",
+      password: "",
+      role: "cashier",
+      is_active: true,
+    });
+  }
+
+  async function saveStaffUser() {
+    if (!canEditSetup) {
+      setStatusMessage("You do not have permission to manage staff users");
+      return;
+    }
+
+    const fullName = staffUserForm.full_name.trim();
+    if (!fullName) {
+      setStatusMessage("Enter staff full name");
+      return;
+    }
+
+    if (staffUserForm.id) {
+      if (staffUserForm.id === staffProfile?.id && staffUserForm.role !== "admin") {
+        setStatusMessage("You cannot remove admin access from your current session here");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("staff_profiles")
+        .update({
+          full_name: fullName,
+          role: staffUserForm.role,
+          is_active: staffUserForm.is_active,
+        })
+        .eq("id", staffUserForm.id);
+
+      if (error) {
+        setStatusMessage(`Could not update staff user: ${error.message}`);
+        return;
+      }
+
+      setStatusMessage("Staff user updated");
+      resetStaffUserForm();
+      await loadStaffUsers();
+      return;
+    }
+
+    const email = staffUserForm.email.trim();
+    const password = staffUserForm.password;
+
+    if (!email) {
+      setStatusMessage("Enter login email for the new staff user");
+      return;
+    }
+
+    if (password.length < 6) {
+      setStatusMessage("Temporary password must be at least 6 characters");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setStatusMessage("Supabase public environment variables are missing");
+      return;
+    }
+
+    const detachedAuthClient = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+
+    const { data: signUpData, error: signUpError } = await detachedAuthClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          role: staffUserForm.role,
+        },
+      },
+    });
+
+    if (signUpError || !signUpData.user) {
+      setStatusMessage(`Could not create staff login: ${signUpError?.message || "Unknown error"}`);
+      return;
+    }
+
+    const { error: profileError } = await supabase
+      .from("staff_profiles")
+      .upsert({
+        id: signUpData.user.id,
+        full_name: fullName,
+        role: staffUserForm.role,
+        is_active: staffUserForm.is_active,
+      });
+
+    if (profileError) {
+      setStatusMessage(`Login created, but profile could not be saved: ${profileError.message}`);
+      return;
+    }
+
+    setStatusMessage("Staff user created. They can sign in with the email and password you set.");
+    resetStaffUserForm();
+    await loadStaffUsers();
+  }
 
   async function loadPaymentMethods() {
     const { data: methodsData, error: methodsError } = await supabase
@@ -3862,6 +4024,7 @@ const canEditSetup = isAdmin;
     await loadSalesTaxes();
     await loadPaymentMethods();
     await loadPromotions();
+    await loadStaffUsers();
     await loadProducts();
     await loadActiveOrders();
     await loadCompletedOrders();
@@ -5884,7 +6047,7 @@ const canEditSetup = isAdmin;
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
                 {canViewInventory ? navButton("audit", "Stock Audit") : null}
                 {navButton("history", "History")}
-                {canViewProfitability ? navButton("profitability", "COGS/Profit") : null}
+                {navButton("profitability", "COGS/Profit")}
                 {canViewCustomers ? navButton("customers", "CRM & Loyalty") : null}
                 {canViewCustomers ? navButton("campaigns", "WhatsApp Campaigns") : null}
                 {canViewReports ? navButton("reports", "Reports") : null}
@@ -5894,19 +6057,11 @@ const canEditSetup = isAdmin;
                 {canViewSetup ? navButton("setup", "Setup") : null}
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
               </div>
-              {isCashier ? (
+              {currentRole === "cashier" ? (
                 <p className="text-xs text-rose-700/60">
                   Cashier access: POS, Active, and History only
                 </p>
-              ) : isManager ? (
-                <p className="text-xs text-rose-700/60">
-                  Manager access: operations, inventory, reports, and customers. Setup and recipes stay admin only.
-                </p>
-              ) : (
-                <p className="text-xs text-rose-700/60">
-                  Admin access: full control across POS, setup, inventory, recipes, reports, and customers.
-                </p>
-              )}
+              ) : null}
             </div>
           </div>
         </section>
@@ -9641,6 +9796,114 @@ const canEditSetup = isAdmin;
                       </button>
                     );
                   })}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+                <h2 className="mb-4 text-2xl font-semibold">Staff User Management</h2>
+                <p className="mb-4 text-xs text-rose-700/80">
+                  Admin-only area. Create staff logins for cashier, manager, and admin. For new users, enter a login email and temporary password. Existing users can be edited below.
+                </p>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">Full Name</label>
+                    <input
+                      value={staffUserForm.full_name}
+                      onChange={(e) => setStaffUserForm((prev) => ({ ...prev, full_name: e.target.value }))}
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="Staff full name"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">Role</label>
+                    <select
+                      value={staffUserForm.role}
+                      onChange={(e) => setStaffUserForm((prev) => ({ ...prev, role: normalizeRole(e.target.value) }))}
+                      className="w-full rounded-xl border px-3 py-2"
+                    >
+                      <option value="cashier">cashier</option>
+                      <option value="manager">manager</option>
+                      <option value="admin">admin</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">Login Email {staffUserForm.id ? "(leave unchanged for existing user)" : ""}</label>
+                    <input
+                      value={staffUserForm.email}
+                      onChange={(e) => setStaffUserForm((prev) => ({ ...prev, email: e.target.value }))}
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="staff@example.com"
+                      disabled={Boolean(staffUserForm.id)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">Temporary Password {staffUserForm.id ? "(optional, not changed here)" : ""}</label>
+                    <input
+                      type="password"
+                      value={staffUserForm.password}
+                      onChange={(e) => setStaffUserForm((prev) => ({ ...prev, password: e.target.value }))}
+                      className="w-full rounded-xl border px-3 py-2"
+                      placeholder="At least 6 characters"
+                      disabled={Boolean(staffUserForm.id)}
+                    />
+                  </div>
+                </div>
+
+                {staffUserForm.id && (
+                  <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    Editing user ID: <span className="font-medium">{staffUserForm.id}</span>
+                  </div>
+                )}
+
+                <label className="mt-4 flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={staffUserForm.is_active}
+                    onChange={(e) => setStaffUserForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                  />
+                  Active user
+                </label>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={saveStaffUser}
+                    className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-sm"
+                  >
+                    {staffUserForm.id ? "Update Staff User" : "Create Staff User"}
+                  </button>
+                  <button
+                    onClick={resetStaffUserForm}
+                    className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <div className="mt-5 space-y-2">
+                  {staffUsers.map((user) => (
+                    <button
+                      key={user.id}
+                      onClick={() => loadStaffUserIntoForm(user)}
+                      className="block w-full rounded-xl border p-3 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{user.full_name || "Unnamed Staff"}</div>
+                          <div className="text-xs text-rose-700/70">{user.role} - {user.is_active === false ? "inactive" : "active"}</div>
+                        </div>
+                        <div className="text-[11px] text-rose-700/60">{user.id.slice(0, 8)}...</div>
+                      </div>
+                    </button>
+                  ))}
+                  {staffUsers.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-rose-200 px-3 py-4 text-sm text-rose-700/70">
+                      No staff users found yet.
+                    </div>
+                  )}
                 </div>
               </section>
 
