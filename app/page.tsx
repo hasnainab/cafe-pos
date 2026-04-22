@@ -4905,25 +4905,30 @@ const canEditSetup = currentRole === "admin";
       const defaultUnit = effectItem ? getRecipeCostBasisUnit(effectItem.unit) : "pcs";
       const deductionUnit = modifierForm.inventory_effect_unit || defaultUnit;
 
+      const { error: clearEffectError } = await supabase
+        .from("modifier_inventory_effects")
+        .delete()
+        .eq("modifier_id", modifierId);
+
+      if (clearEffectError) {
+        setStatusMessage(`Modifier saved, but old stock effect could not be cleared: ${clearEffectError.message}`);
+        return;
+      }
+
       if (inventoryItemId > 0 && quantityDelta > 0) {
         const { error: effectError } = await supabase
           .from("modifier_inventory_effects")
-          .upsert(
-            {
-              modifier_id: modifierId,
-              inventory_item_id: inventoryItemId,
-              quantity_delta: quantityDelta,
-              deduction_unit: deductionUnit,
-            },
-            { onConflict: "modifier_id" }
-          );
+          .insert({
+            modifier_id: modifierId,
+            inventory_item_id: inventoryItemId,
+            quantity_delta: quantityDelta,
+            deduction_unit: deductionUnit,
+          });
 
         if (effectError) {
           setStatusMessage(`Modifier saved, but stock effect could not be saved: ${effectError.message}`);
           return;
         }
-      } else {
-        await supabase.from("modifier_inventory_effects").delete().eq("modifier_id", modifierId);
       }
     }
 
