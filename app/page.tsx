@@ -2489,8 +2489,23 @@ const canEditSetup = currentRole === "admin";
 
     setProductModifierMap(productToModifierIds);
 
+    const { data: categoryData, error: categoryError } = await supabase
+      .from("categories")
+      .select("*");
+
+    if (categoryError) {
+      setStatusMessage(`Could not load categories for products: ${categoryError.message}`);
+      return;
+    }
+
     const categoryMap = new Map<string, Category>();
-    categories.forEach((cat) => categoryMap.set(cat.id, cat));
+    (categoryData || []).forEach((cat: any) => {
+      categoryMap.set(String(cat.id), {
+        id: String(cat.id),
+        name: String(cat.name),
+        active: cat.active ?? null,
+      });
+    });
 
     const rows: Product[] = (productData || []).map((item: any) => {
       const productId = Number(item.id);
