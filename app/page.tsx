@@ -10077,7 +10077,7 @@ const canEditSetup = currentRole === "admin";
 
       setStatusMessage("Staff user updated");
     } else {
-      const email = staffUserForm.email.trim();
+      const email = staffUserForm.email.trim().toLowerCase();
       const password = staffUserForm.password;
 
       if (!email) {
@@ -10090,7 +10090,14 @@ const canEditSetup = currentRole === "admin";
         return;
       }
 
-      const currentSession = (await supabaseAuth.auth.getSession()).data.session;
+      const {
+        data: { session: currentSession },
+      } = await supabaseAuth.auth.getSession();
+
+      if (!currentSession?.access_token || !currentSession?.refresh_token) {
+        setStatusMessage("Admin session expired. Please sign in again.");
+        return;
+      }
 
       const { data: signUpData, error: signUpError } = await supabaseAuth.auth.signUp({
         email,
@@ -10108,6 +10115,11 @@ const canEditSetup = currentRole === "admin";
         return;
       }
 
+      await supabaseAuth.auth.setSession({
+        access_token: currentSession.access_token,
+        refresh_token: currentSession.refresh_token,
+      });
+
       const { error: profileError } = await supabaseAuth
         .from("staff_profiles")
         .upsert({
@@ -10117,19 +10129,17 @@ const canEditSetup = currentRole === "admin";
           is_active: staffUserForm.is_active,
         });
 
-      if (currentSession?.access_token && currentSession?.refresh_token) {
-        await supabaseAuth.auth.setSession({
-          access_token: currentSession.access_token,
-          refresh_token: currentSession.refresh_token,
-        });
-      }
-
       if (profileError) {
         setStatusMessage(`Login created, but staff profile could not be saved: ${profileError.message}`);
         return;
       }
 
-      setStatusMessage("Staff login created");
+      const needsEmailConfirmation = !signUpData.session;
+      setStatusMessage(
+        needsEmailConfirmation
+          ? "Staff login created. Email confirmation may be required before first sign in."
+          : "Staff login created"
+      );
     }
 
     setStaffUserForm({
