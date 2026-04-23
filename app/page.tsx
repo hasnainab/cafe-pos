@@ -2494,7 +2494,7 @@ const canEditSetup = currentRole === "admin";
 
     setSalesTaxes(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         rate_percent: Number(item.rate_percent || 0),
         active: item.active ?? null,
@@ -2515,7 +2515,7 @@ const canEditSetup = currentRole === "admin";
 
     setPromotions(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         start_at: String(item.start_at),
         end_at: String(item.end_at),
@@ -8319,7 +8319,7 @@ const canEditSetup = currentRole === "admin";
                               <div key={item.id} className="flex items-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => updateStockIntakeRow(row.row_id, { inventory_item_id: String(item.id), item_search: item.item_name, new_item_name: "" })}
+                                  onClick={() => updateStockIntakeRow(row.row_id, { inventory_item_id: Number(item.id), item_search: item.item_name, new_item_name: "" })}
                                   className="block w-full rounded-lg border border-rose-200 bg-white px-2 py-1 text-left text-xs text-rose-700 hover:bg-rose-50"
                                 >
                                   {item.item_name}
