@@ -5894,123 +5894,6 @@ const canEditSetup = currentRole === "admin";
     </button>
   );
 
-
-  function loadStaffProfileIntoForm(staffRow: StaffAdminRow) {
-    setStaffUserForm({
-      id: staffRow.id,
-      email: "",
-      password: "",
-      full_name: String(staffRow.full_name || ""),
-      role: normalizeRole(staffRow.role),
-      is_active: staffRow.is_active !== false,
-    });
-  }
-
-  async function saveStaffUser() {
-    if (!canEditSetup) {
-      setStatusMessage("You do not have permission to manage staff users");
-      return;
-    }
-
-    const fullName = staffUserForm.full_name.trim();
-    if (!fullName) {
-      setStatusMessage("Enter full name");
-      return;
-    }
-
-    if (staffUserForm.id) {
-      const { error } = await supabaseAuth
-        .from("staff_profiles")
-        .update({
-          full_name: fullName,
-          role: staffUserForm.role,
-          is_active: staffUserForm.is_active,
-        })
-        .eq("id", staffUserForm.id);
-
-      if (error) {
-        setStatusMessage(`Could not update staff user: ${error.message}`);
-        return;
-      }
-
-      setStatusMessage("Staff user updated");
-    } else {
-      const email = staffUserForm.email.trim().toLowerCase();
-      const password = staffUserForm.password;
-
-      if (!email) {
-        setStatusMessage("Enter login email");
-        return;
-      }
-
-      if (password.length < 6) {
-        setStatusMessage("Temporary password must be at least 6 characters");
-        return;
-      }
-
-      const {
-        data: { session: currentSession },
-      } = await supabaseAuth.auth.getSession();
-
-      if (!currentSession?.access_token || !currentSession?.refresh_token) {
-        setStatusMessage("Admin session expired. Please sign in again.");
-        return;
-      }
-
-      const { data: signUpData, error: signUpError } = await supabaseAuth.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-            role: staffUserForm.role,
-          },
-        },
-      });
-
-      if (signUpError || !signUpData.user?.id) {
-        setStatusMessage(`Could not create staff login: ${signUpError?.message || "Unknown error"}`);
-        return;
-      }
-
-      await supabaseAuth.auth.setSession({
-        access_token: currentSession.access_token,
-        refresh_token: currentSession.refresh_token,
-      });
-
-      const { error: profileError } = await supabaseAuth
-        .from("staff_profiles")
-        .upsert({
-          id: signUpData.user.id,
-          full_name: fullName,
-          role: staffUserForm.role,
-          is_active: staffUserForm.is_active,
-        });
-
-      if (profileError) {
-        setStatusMessage(`Login created, but staff profile could not be saved: ${profileError.message}`);
-        return;
-      }
-
-      const needsEmailConfirmation = !signUpData.session;
-      setStatusMessage(
-        needsEmailConfirmation
-          ? "Staff login created. Email confirmation may be required before first sign in."
-          : "Staff login created"
-      );
-    }
-
-    setStaffUserForm({
-      id: null,
-      email: "",
-      password: "",
-      full_name: "",
-      role: "cashier",
-      is_active: true,
-    });
-    await refreshAll();
-  }
-
   return authLoading ? (
     <main className="min-h-screen bg-rose-50 p-6">
       <div className="mx-auto max-w-md rounded-2xl border border-rose-100 bg-white p-6 shadow-sm">
@@ -10026,31 +9909,24 @@ const canEditSetup = currentRole === "admin";
 
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Staff User Management</h2>
-                <div className="space-y-3">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  Create login users in <span className="font-semibold">Supabase Authentication</span> first. Then select a staff user below to edit name, role, and active status here.
+                </div>
+
+                <div className="mt-4 space-y-3">
                   <input
                     value={staffUserForm.full_name}
                     onChange={(e) => setStaffUserForm((prev) => ({ ...prev, full_name: e.target.value }))}
                     className="w-full rounded-xl border px-3 py-2"
                     placeholder="Full name"
                   />
-                  {!staffUserForm.id && (
-                    <>
-                      <input
-                        value={staffUserForm.email}
-                        onChange={(e) => setStaffUserForm((prev) => ({ ...prev, email: e.target.value }))}
-                        className="w-full rounded-xl border px-3 py-2"
-                        placeholder="Login email"
-                      />
-                      <input
-                        value={staffUserForm.password}
-                        onChange={(e) => setStaffUserForm((prev) => ({ ...prev, password: e.target.value }))}
-                        className="w-full rounded-xl border px-3 py-2"
-                        placeholder="Temporary password"
-                        type="password"
-                      />
-                    </>
-                  )}
                   <div className="grid gap-3 md:grid-cols-2">
+                    <input
+                      value={staffUserForm.id || ""}
+                      readOnly
+                      className="w-full rounded-xl border bg-rose-50 px-3 py-2 text-sm text-rose-700/80"
+                      placeholder="Select a user below to edit"
+                    />
                     <select
                       value={staffUserForm.role}
                       onChange={(e) => setStaffUserForm((prev) => ({ ...prev, role: normalizeRole(e.target.value) }))}
@@ -10060,21 +9936,21 @@ const canEditSetup = currentRole === "admin";
                       <option value="manager">Manager</option>
                       <option value="admin">Admin</option>
                     </select>
-                    <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={staffUserForm.is_active}
-                        onChange={(e) => setStaffUserForm((prev) => ({ ...prev, is_active: e.target.checked }))}
-                      />
-                      Active
-                    </label>
                   </div>
+                  <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={staffUserForm.is_active}
+                      onChange={(e) => setStaffUserForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+                    />
+                    Active
+                  </label>
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={saveStaffUser}
                       className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-sm"
                     >
-                      {staffUserForm.id ? "Update Staff User" : "Create Staff User"}
+                      Update Staff User
                     </button>
                     <button
                       onClick={() =>
@@ -10093,22 +9969,29 @@ const canEditSetup = currentRole === "admin";
                     </button>
                   </div>
                   <div className="text-xs text-rose-700/70">
-                    Admin can create new cashier, manager, and admin logins here. Editing an existing user updates role and active status.
+                    This screen now edits existing staff profiles only. New login creation has been removed from the browser.
                   </div>
                 </div>
 
                 <div className="mt-4 space-y-2">
-                  {staffProfiles.map((staffRow) => (
-                    <button
-                      key={staffRow.id}
-                      onClick={() => loadStaffProfileIntoForm(staffRow)}
-                      className="block w-full rounded-xl border p-3 text-left"
-                    >
-                      <div className="font-medium">{staffRow.full_name || staffRow.id}</div>
-                      <div className="text-sm text-rose-700/70">Role: {staffRow.role}</div>
-                      <div className="text-xs text-rose-700/70">Status: {staffRow.is_active === false ? "Inactive" : "Active"}</div>
-                    </button>
-                  ))}
+                  {staffProfiles.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-rose-200 p-3 text-sm text-rose-700/70">
+                      No staff profiles found.
+                    </div>
+                  ) : (
+                    staffProfiles.map((staffRow) => (
+                      <button
+                        key={staffRow.id}
+                        onClick={() => loadStaffProfileIntoForm(staffRow)}
+                        className="block w-full rounded-xl border p-3 text-left"
+                      >
+                        <div className="font-medium">{staffRow.full_name || staffRow.id}</div>
+                        <div className="text-sm text-rose-700/70">Role: {staffRow.role}</div>
+                        <div className="text-xs text-rose-700/70">Status: {staffRow.is_active === false ? "Inactive" : "Active"}</div>
+                        <div className="mt-1 text-[11px] text-rose-700/60">{staffRow.id}</div>
+                      </button>
+                    ))
+                  )}
                 </div>
               </section>
 
@@ -10154,6 +10037,59 @@ const canEditSetup = currentRole === "admin";
             </section>
           </div>
         )}
+  function loadStaffProfileIntoForm(staffRow: StaffAdminRow) {
+    setStaffUserForm({
+      id: staffRow.id,
+      email: "",
+      password: "",
+      full_name: String(staffRow.full_name || ""),
+      role: normalizeRole(staffRow.role),
+      is_active: staffRow.is_active !== false,
+    });
+  }
+
+  async function saveStaffUser() {
+    if (!canEditSetup) {
+      setStatusMessage("You do not have permission to manage staff users");
+      return;
+    }
+
+    if (!staffUserForm.id) {
+      setStatusMessage("Create login users in Supabase Authentication first, then edit their staff profile here.");
+      return;
+    }
+
+    const fullName = staffUserForm.full_name.trim();
+    if (!fullName) {
+      setStatusMessage("Enter full name");
+      return;
+    }
+
+    const { error } = await supabaseAuth
+      .from("staff_profiles")
+      .update({
+        full_name: fullName,
+        role: staffUserForm.role,
+        is_active: staffUserForm.is_active,
+      })
+      .eq("id", staffUserForm.id);
+
+    if (error) {
+      setStatusMessage(`Could not update staff user: ${error.message}`);
+      return;
+    }
+
+    setStatusMessage("Staff user updated");
+    setStaffUserForm({
+      id: null,
+      email: "",
+      password: "",
+      full_name: "",
+      role: "cashier",
+      is_active: true,
+    });
+    await refreshAll();
+  }
 
 
         {selectedQueueOrder ? (
