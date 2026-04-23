@@ -2389,7 +2389,7 @@ const canEditSetup = currentRole === "admin";
 
     setCategories(
       (data || []).map((item: any) => ({
-        id: String(item.id),
+        id: Number(item.id),
         name: String(item.name),
         active: item.active ?? null,
       }))
