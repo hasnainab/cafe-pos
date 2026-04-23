@@ -8,47 +8,7 @@ function normalizeRole(role: string): AllowedRole {
   return "cashier";
 }
 
-async function getRequestingUser(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
-
-  if (!token) {
-    return { error: "Missing auth token" as const };
-  }
-
-  const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
-
-  if (userError || !userData.user) {
-    return { error: "Invalid session" as const };
-  }
-
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("staff_profiles")
-    .select("id, role, is_active")
-    .eq("id", userData.user.id)
-    .single();
-
-  if (profileError || !profile || profile.is_active === false) {
-    return { error: "Staff profile not found or inactive" as const };
-  }
-
-  return { user: userData.user, profile };
-}
-
-function isAdmin(role: string | null | undefined) {
-  return role === "admin";
-}
-
-export async function GET(request: NextRequest) {
-  const actor = await getRequestingUser(request);
-  if ("error" in actor) {
-    return NextResponse.json({ error: actor.error }, { status: 401 });
-  }
-
-  if (!isAdmin(actor.profile.role)) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
-  }
-
+export async function GET(_request: NextRequest) {
   const { data, error } = await supabaseAdmin
     .from("staff_profiles")
     .select("id, full_name, role, is_active, created_at")
@@ -82,15 +42,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const actor = await getRequestingUser(request);
-  if ("error" in actor) {
-    return NextResponse.json({ error: actor.error }, { status: 401 });
-  }
-
-  if (!isAdmin(actor.profile.role)) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
-  }
-
   const body = await request.json();
   const email = String(body.email ?? "").trim().toLowerCase();
   const fullName = String(body.full_name ?? "").trim();
@@ -156,15 +107,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const actor = await getRequestingUser(request);
-  if ("error" in actor) {
-    return NextResponse.json({ error: actor.error }, { status: 401 });
-  }
-
-  if (!isAdmin(actor.profile.role)) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
-  }
-
   const body = await request.json();
   const id = String(body.id ?? "");
   const fullName = String(body.full_name ?? "").trim();
