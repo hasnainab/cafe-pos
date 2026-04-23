@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/lib/server/supabase-admin";
 
 type AllowedRole = "admin" | "manager" | "cashier";
@@ -10,41 +9,27 @@ function normalizeRole(role: string): AllowedRole {
 }
 
 async function getRequestingUser(request: NextRequest) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
   const authHeader = request.headers.get("authorization");
-  const token = authHeader?.replace(/^Bearer\s+/i, "");
+  const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
 
   if (!token) {
-    return { error: "Missing auth token" };
+    return { error: "Missing auth token" as const };
   }
 
-  const supabaseServer = createClient(supabaseUrl, anonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
+  const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
 
-  const { data: userData, error: userError } = await supabaseServer.auth.getUser(token);
   if (userError || !userData.user) {
-    return { error: "Invalid session" };
+    return { error: "Invalid session" as const };
   }
 
-  const { data: profile, error: profileError } = await supabaseServer
+  const { data: profile, error: profileError } = await supabaseAdmin
     .from("staff_profiles")
     .select("id, role, is_active")
     .eq("id", userData.user.id)
     .single();
 
   if (profileError || !profile || profile.is_active === false) {
-    return { error: "Staff profile not found or inactive" };
+    return { error: "Staff profile not found or inactive" as const };
   }
 
   return { user: userData.user, profile };
