@@ -1863,7 +1863,61 @@ const canEditSetup = currentRole === "admin";
 
   const activePromotion = useMemo(() => {
     const now = Date.now();
-    return (
+    function loadStaffProfileIntoForm(staffRow: StaffAdminRow) {
+    setStaffUserForm({
+      id: staffRow.id,
+      email: "",
+      password: "",
+      full_name: String(staffRow.full_name || ""),
+      role: normalizeRole(staffRow.role),
+      is_active: staffRow.is_active !== false,
+    });
+  }
+
+  async function saveStaffUser() {
+    if (!canEditSetup) {
+      setStatusMessage("You do not have permission to manage staff users");
+      return;
+    }
+
+    if (!staffUserForm.id) {
+      setStatusMessage("Create login users in Supabase Authentication first, then edit their staff profile here.");
+      return;
+    }
+
+    const fullName = staffUserForm.full_name.trim();
+    if (!fullName) {
+      setStatusMessage("Enter full name");
+      return;
+    }
+
+    const { error } = await supabaseAuth
+      .from("staff_profiles")
+      .update({
+        full_name: fullName,
+        role: staffUserForm.role,
+        is_active: staffUserForm.is_active,
+      })
+      .eq("id", staffUserForm.id);
+
+    if (error) {
+      setStatusMessage(`Could not update staff user: ${error.message}`);
+      return;
+    }
+
+    setStatusMessage("Staff user updated");
+    setStaffUserForm({
+      id: null,
+      email: "",
+      password: "",
+      full_name: "",
+      role: "cashier",
+      is_active: true,
+    });
+    await refreshAll();
+  }
+
+  return (
       promotions.find((promo) => {
         const start = new Date(promo.start_at).getTime();
         const end = new Date(promo.end_at).getTime();
@@ -2056,15 +2110,6 @@ const canEditSetup = currentRole === "admin";
         return productName.includes(q) || categoryNames.includes(q);
       });
   }, [products, selectedPosCategoryId, productSearch]);
-
-
-  async function switchUser() {
-    try {
-      await supabaseAuth.auth.signOut();
-    } finally {
-      router.push("/login");
-    }
-  }
 
   const groupedPosSections = useMemo(() => {
     const sections: Array<{ id: string; name: string; products: Product[] }> = [];
@@ -5923,7 +5968,7 @@ const canEditSetup = currentRole === "admin";
             </div>
 
             <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap gap-2">
                 {navButton("pos", "POS")}
                 {navButton("active", "Active")}
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
@@ -5938,18 +5983,6 @@ const canEditSetup = currentRole === "admin";
                 {canViewReports ? navButton("recipePricing", "Recipe Pricing") : null}
                 {canViewSetup ? navButton("setup", "Setup") : null}
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
-                <button
-                  onClick={switchUser}
-                  className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
-                >
-                  Switch User
-                </button>
-                <button
-                  onClick={switchUser}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                >
-                  Logout
-                </button>
               </div>
               {currentRole === "cashier" ? (
                 <p className="text-xs text-rose-700/60">
@@ -10058,60 +10091,6 @@ const canEditSetup = currentRole === "admin";
             </section>
           </div>
         )}
-  function loadStaffProfileIntoForm(staffRow: StaffAdminRow) {
-    setStaffUserForm({
-      id: staffRow.id,
-      email: "",
-      password: "",
-      full_name: String(staffRow.full_name || ""),
-      role: normalizeRole(staffRow.role),
-      is_active: staffRow.is_active !== false,
-    });
-  }
-
-  async function saveStaffUser() {
-    if (!canEditSetup) {
-      setStatusMessage("You do not have permission to manage staff users");
-      return;
-    }
-
-    if (!staffUserForm.id) {
-      setStatusMessage("Create login users in Supabase Authentication first, then edit their staff profile here.");
-      return;
-    }
-
-    const fullName = staffUserForm.full_name.trim();
-    if (!fullName) {
-      setStatusMessage("Enter full name");
-      return;
-    }
-
-    const { error } = await supabaseAuth
-      .from("staff_profiles")
-      .update({
-        full_name: fullName,
-        role: staffUserForm.role,
-        is_active: staffUserForm.is_active,
-      })
-      .eq("id", staffUserForm.id);
-
-    if (error) {
-      setStatusMessage(`Could not update staff user: ${error.message}`);
-      return;
-    }
-
-    setStatusMessage("Staff user updated");
-    setStaffUserForm({
-      id: null,
-      email: "",
-      password: "",
-      full_name: "",
-      role: "cashier",
-      is_active: true,
-    });
-    await refreshAll();
-  }
-
 
         {selectedQueueOrder ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-rose-950/20 p-4">
