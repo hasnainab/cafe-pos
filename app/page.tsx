@@ -2057,6 +2057,15 @@ const canEditSetup = currentRole === "admin";
       });
   }, [products, selectedPosCategoryId, productSearch]);
 
+
+  async function switchUser() {
+    try {
+      await supabaseAuth.auth.signOut();
+    } finally {
+      router.push("/login");
+    }
+  }
+
   const groupedPosSections = useMemo(() => {
     const sections: Array<{ id: string; name: string; products: Product[] }> = [];
 
@@ -5894,15 +5903,6 @@ const canEditSetup = currentRole === "admin";
     </button>
   );
 
-  async function switchUser() {
-    try {
-      await supabaseAuth.auth.signOut();
-    } finally {
-      router.push("/login");
-    }
-  }
-
-
   return authLoading ? (
     <main className="min-h-screen bg-rose-50 p-6">
       <div className="mx-auto max-w-md rounded-2xl border border-rose-100 bg-white p-6 shadow-sm">
@@ -5940,13 +5940,13 @@ const canEditSetup = currentRole === "admin";
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
                 <button
                   onClick={switchUser}
-                  className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700"
+                  className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
                 >
                   Switch User
                 </button>
                 <button
                   onClick={switchUser}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
                 >
                   Logout
                 </button>
