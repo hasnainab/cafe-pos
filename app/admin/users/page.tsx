@@ -47,13 +47,20 @@ const blankForm: StaffForm = {
 export default function AdminUsersPage() {
   const router = useRouter();
   const [authChecked, setAuthChecked] = useState(false);
-  const [authToken, setAuthToken] = useState('');
   const [currentRole, setCurrentRole] = useState<AllowedRole>('cashier');
   const [statusMessage, setStatusMessage] = useState('Loading...');
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [form, setForm] = useState<StaffForm>(blankForm);
   const [search, setSearch] = useState('');
+
+  async function getFreshAccessToken() {
+    const {
+      data: { session },
+    } = await supabaseAuth.auth.getSession();
+
+    return session?.access_token || '';
+  }
 
   useEffect(() => {
     const loadAuth = async () => {
@@ -80,7 +87,6 @@ export default function AdminUsersPage() {
 
       const role = normalizeRole(profile.role);
       setCurrentRole(role);
-      setAuthToken(session.access_token);
       setAuthChecked(true);
 
       if (role !== 'admin') {
@@ -88,17 +94,17 @@ export default function AdminUsersPage() {
         return;
       }
 
-      await loadRows(session.access_token);
+      await loadRows();
     };
 
     loadAuth();
   }, [router]);
 
-  async function loadRows(token = authToken) {
-    if (!token) return;
-
+  async function loadRows() {
     setLoading(true);
     try {
+      const token = await getFreshAccessToken();
+
       const response = await fetch('/api/admin/staff', {
         method: 'GET',
         headers: {
@@ -128,12 +134,14 @@ export default function AdminUsersPage() {
 
     setLoading(true);
     try {
+      const token = await getFreshAccessToken();
       const isEdit = Boolean(form.id);
+
       const response = await fetch('/api/admin/staff', {
         method: isEdit ? 'PATCH' : 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(form),
       });
@@ -156,11 +164,13 @@ export default function AdminUsersPage() {
   async function sendPasswordReset(email: string) {
     setLoading(true);
     try {
+      const token = await getFreshAccessToken();
+
       const response = await fetch('/api/admin/staff/reset-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ email }),
       });
