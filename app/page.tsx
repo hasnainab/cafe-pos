@@ -5894,6 +5894,15 @@ const canEditSetup = currentRole === "admin";
     </button>
   );
 
+  async function switchUser() {
+    try {
+      await supabaseAuth.auth.signOut();
+    } finally {
+      router.push("/login");
+    }
+  }
+
+
   return authLoading ? (
     <main className="min-h-screen bg-rose-50 p-6">
       <div className="mx-auto max-w-md rounded-2xl border border-rose-100 bg-white p-6 shadow-sm">
@@ -5914,7 +5923,7 @@ const canEditSetup = currentRole === "admin";
             </div>
 
             <div className="space-y-2">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {navButton("pos", "POS")}
                 {navButton("active", "Active")}
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
@@ -5929,6 +5938,18 @@ const canEditSetup = currentRole === "admin";
                 {canViewReports ? navButton("recipePricing", "Recipe Pricing") : null}
                 {canViewSetup ? navButton("setup", "Setup") : null}
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
+                <button
+                  onClick={switchUser}
+                  className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700"
+                >
+                  Switch User
+                </button>
+                <button
+                  onClick={switchUser}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700"
+                >
+                  Logout
+                </button>
               </div>
               {currentRole === "cashier" ? (
                 <p className="text-xs text-rose-700/60">
