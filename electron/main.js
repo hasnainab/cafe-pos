@@ -45,11 +45,10 @@ function createMainWindow() {
     },
   });
 
-  if (isDev) {
+    if (isDev) {
     mainWindow.loadURL("http://localhost:3000");
   } else {
-    // Point this to your hosted POS URL, or to a local bundled build if you package one later.
-    mainWindow.loadURL("http://localhost:3000");
+    mainWindow.loadURL("https://www.spillthetea.vip");
   }
 }
 

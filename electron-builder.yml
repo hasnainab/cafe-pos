@@ -1,0 +1,32 @@
+appId: com.spillthetea.businesshub
+productName: Spill The Tea Business Hub
+
+directories:
+  output: dist-electron
+
+files:
+  - app/**
+  - electron/**
+  - lib/**
+  - public/**
+  - next.config.ts
+  - package.json
+  - package-lock.json
+  - tsconfig.json
+  - electron-pos.d.ts
+  - .next/standalone/**
+  - .next/static/**
+
+extraResources:
+  - from: public
+    to: public
+
+win:
+  target:
+    - nsis
+    - portable
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

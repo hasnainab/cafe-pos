@@ -45,3 +45,8 @@ next-env.d.ts
 *.zip
 node_modules
 .env.local
+dist-electron/
+.next/
+node_modules/
+.vercel/
+*.zip
