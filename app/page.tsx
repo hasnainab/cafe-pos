@@ -5880,6 +5880,14 @@ const canEditSetup = currentRole === "admin";
     );
   }
 
+  async function switchUser() {
+    try {
+      await supabaseAuth.auth.signOut();
+    } finally {
+      router.push("/login");
+    }
+  }
+
   const navButton = (mode: ViewMode, label: string) => (
     <button
       key={mode}
@@ -5893,15 +5901,6 @@ const canEditSetup = currentRole === "admin";
       {label}
     </button>
   );
-
-
-  async function switchUser() {
-    try {
-      await supabaseAuth.auth.signOut();
-    } finally {
-      router.push("/login");
-    }
-  }
 
   function loadStaffProfileIntoForm(staffRow: StaffAdminRow) {
     setStaffUserForm({
@@ -5956,6 +5955,7 @@ const canEditSetup = currentRole === "admin";
     });
     await refreshAll();
   }
+
 
   return authLoading ? (
     <main className="min-h-screen bg-rose-50 p-6">
