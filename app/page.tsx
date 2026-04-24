@@ -4931,7 +4931,7 @@ async function printOrderArtifacts(params: {
       html: buildReceiptHtml(orderForPrint),
       printOptions: {
         margins: { marginType: "none" },
-        pageSize: { width: 300000, height: 2000000 },
+        pageSize: { width: 76200, height: 2000000 },
       },
     });
   }
@@ -4942,24 +4942,25 @@ async function printOrderArtifacts(params: {
       html: buildKitchenHtml(orderForPrint),
       printOptions: {
         margins: { marginType: "none" },
-        pageSize: { width: 300000, height: 2000000 },
+        pageSize: { width: 76200, height: 2000000 },
       },
     });
   }
 
   if (autoPrintStickers && stickerPrinter) {
-    const stickerHtml = buildStickerHtml(expandDrinkStickers(orderForPrint));
-    await electronPOS.printStickers({
-      printerName: stickerPrinter,
-      html: stickerHtml,
-      printOptions: {
-        margins: { marginType: "none" },
-        pageSize: { width: 200000, height: 100000 },
-      },
-    });
+    const stickerRows = expandDrinkStickers(orderForPrint);
+    if (stickerRows.length > 0) {
+      await electronPOS.printStickers({
+        printerName: stickerPrinter,
+        html: buildStickerHtml(stickerRows),
+        printOptions: {
+          margins: { marginType: "none" },
+          pageSize: { width: 50800, height: 25400 },
+        },
+      });
+    }
   }
 }
-
 
   async function saveCustomerBonus(customerId: number, bonusValue: string) {
     if (!canEditCustomerBonus) {
