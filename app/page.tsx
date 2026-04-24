@@ -4874,56 +4874,92 @@ const canEditSetup = currentRole === "admin";
     return /(americano|espresso|latte|cappuccino|mocha|coffee|tea|frappe|shake|smoothie|macchiato)/.test(name);
   }
 
-  async function printOrderArtifacts(params: {
-    orderNumber: string;
-    createdAt: string;
-    customerNameForPrint: string;
-    paymentMethodName: string;
-  }) {
-    const electronPOS = (window as any).electronPOS;
-    if (!electronPOS) return;
+async function printOrderArtifacts(params: {
+  orderNumber: string;
+  createdAt: string;
+  customerNameForPrint: string;
+  paymentMethodName: string;
+}) {
+  const electronPOS = (window as any).electronPOS;
+  if (!electronPOS) return;
 
-    const orderForPrint = {
-      order_number: params.orderNumber,
-      created_at: params.createdAt,
-      customer_name: params.customerNameForPrint,
-      payment_method_name: params.paymentMethodName,
-      subtotal: cartSubtotal,
-      tax_total: cartTaxTotal,
-      total: cartGrandTotal,
-      items: cart.map((item) => ({
+  const logoDataUrl = "";
+  const cafePhone = "";
+  const cafeAddress = "";
+
+  const orderForPrint = {
+    order_number: params.orderNumber,
+    created_at: params.createdAt,
+    customer_name: params.customerNameForPrint,
+    payment_method_name: params.paymentMethodName,
+    subtotal: cartSubtotal,
+    tax_total: cartTaxTotal,
+    total: cartGrandTotal,
+    logo_data_url: logoDataUrl || null,
+    business_name: "Spill The Tea",
+    business_tagline: "Cafe • Coffee • Tea • Mocktails",
+    business_phone: cafePhone || null,
+    business_address: cafeAddress || null,
+    items: cart.map((item) => {
+      const modifierTotal = item.modifiers.reduce(
+        (sum, mod) => sum + Number(mod.price_delta || 0),
+        0
+      );
+      const normalUnit = Number(item.base_price || 0) + modifierTotal;
+
+      let unitPrice = normalUnit;
+      if (item.pricing_mode === "complimentary") unitPrice = 0;
+      if (item.pricing_mode === "discounted") {
+        unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
+      }
+
+      return {
         product_name: item.name,
         quantity: item.quantity,
+        unit_price: unitPrice,
+        line_total: unitPrice * Number(item.quantity || 0),
         modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
         notes: item.notes || null,
         product_type: isDrinkProduct(item.product_id, item.name) ? "drink" : "food",
-      })),
-    };
+      };
+    }),
+  };
 
-    if (autoPrintReceipt && receiptKitchenPrinter) {
-      await electronPOS.printReceipt({
-        printerName: receiptKitchenPrinter,
-        html: buildReceiptHtml(orderForPrint),
-      });
-    }
-
-    if (autoPrintKitchen && receiptKitchenPrinter) {
-      await electronPOS.printKitchen({
-        printerName: receiptKitchenPrinter,
-        html: buildKitchenHtml(orderForPrint),
-      });
-    }
-
-    if (autoPrintStickers && stickerPrinter) {
-      const stickerRows = expandDrinkStickers(orderForPrint);
-      if (stickerRows.length > 0) {
-        await electronPOS.printStickers({
-          printerName: stickerPrinter,
-          html: buildStickerHtml(stickerRows),
-        });
-      }
-    }
+  if (autoPrintReceipt && receiptKitchenPrinter) {
+    await electronPOS.printReceipt({
+      printerName: receiptKitchenPrinter,
+      html: buildReceiptHtml(orderForPrint),
+      printOptions: {
+        margins: { marginType: "none" },
+        pageSize: { width: 300000, height: 2000000 },
+      },
+    });
   }
+
+  if (autoPrintKitchen && receiptKitchenPrinter) {
+    await electronPOS.printKitchen({
+      printerName: receiptKitchenPrinter,
+      html: buildKitchenHtml(orderForPrint),
+      printOptions: {
+        margins: { marginType: "none" },
+        pageSize: { width: 300000, height: 2000000 },
+      },
+    });
+  }
+
+  if (autoPrintStickers && stickerPrinter) {
+    const stickerHtml = buildStickerHtml(expandDrinkStickers(orderForPrint));
+    await electronPOS.printStickers({
+      printerName: stickerPrinter,
+      html: stickerHtml,
+      printOptions: {
+        margins: { marginType: "none" },
+        pageSize: { width: 200000, height: 100000 },
+      },
+    });
+  }
+}
+
 
   async function saveCustomerBonus(customerId: number, bonusValue: string) {
     if (!canEditCustomerBonus) {
