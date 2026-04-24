@@ -426,40 +426,40 @@ export function buildStickerHtml(stickers: DrinkStickerInput[], logoDataUrl?: st
           display: flex;
           flex-direction: column;
           justify-content: space-between;
-          padding: 0.04in 0.05in;
+          padding: 0.025in 0.035in;
         }
         .top {
           display: flex;
           justify-content: space-between;
           align-items: flex-start;
-          gap: 4px;
+          gap: 3px;
         }
         .customer {
-          font-size: 14px;
+          font-size: 10px;
           font-weight: 800;
           line-height: 1.0;
-          max-width: 1.18in;
+          max-width: 1.15in;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
         .count {
-          font-size: 13px;
+          font-size: 9px;
           font-weight: 800;
           line-height: 1.0;
           white-space: nowrap;
         }
         .drink {
-          font-size: 13px;
+          font-size: 10px;
           font-weight: 800;
           line-height: 1.0;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          margin-top: 0.02in;
+          margin-top: 0.01in;
         }
         .small {
-          font-size: 8px;
+          font-size: 6px;
           line-height: 1.0;
           white-space: nowrap;
           overflow: hidden;
@@ -473,10 +473,10 @@ export function buildStickerHtml(stickers: DrinkStickerInput[], logoDataUrl?: st
           font-style: italic;
         }
         .bottom {
-          font-size: 8px;
+          font-size: 6px;
           line-height: 1.0;
           font-weight: 700;
-          margin-top: 2px;
+          margin-top: 1px;
         }
         .page-break {
           page-break-before: always;
@@ -486,7 +486,6 @@ export function buildStickerHtml(stickers: DrinkStickerInput[], logoDataUrl?: st
     <body>${pages}</body>
   </html>`;
 }
-
 export function expandDrinkStickers(order: {
   order_number: string;
   customer_name?: string | null;
