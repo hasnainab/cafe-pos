@@ -2439,68 +2439,68 @@ const canEditSetup = currentRole === "admin";
 
 
   async function loadPaymentMethods() {
-    const { data: methodsData, error: methodsError } = await supabase
-      .from("payment_methods")
-      .select("*")
-      .order("name", { ascending: true });
+  const { data: methodsData, error: methodsError } = await supabase
+    .from("payment_methods")
+    .select("*")
+    .order("name", { ascending: true });
 
-    if (methodsError) {
-      setStatusMessage(`Could not load payment methods: ${methodsError.message}`);
-      return;
-    }
-
-    const methods: PaymentMethod[] = (methodsData || []).map((item: any) => ({
-      id: String(item.id),
-      name: String(item.name),
-      active: item.active ?? null,
-    }));
-    setPaymentMethods(methods);
-
-    if (!selectedPaymentMethodId) {
-      const firstActive = methods.find((m) => m.active !== false);
-      if (firstActive) setSelectedPaymentMethodId(firstActive.id);
-    }
-
-    const { data: linkData, error: linkError } = await supabase
-      .from("payment_method_taxes")
-      .select("*");
-
-    if (linkError) {
-      setStatusMessage(`Could not load payment method taxes: ${linkError.message}`);
-      return;
-    }
-
-    const map: Record<number, number[]> = {};
-    (linkData || []).forEach((link: any) => {
-      const paymentMethodId = Number(link.payment_method_id);
-      const salesTaxId = Number(link.sales_tax_id);
-      if (!map[paymentMethodId]) map[paymentMethodId] = [];
-      map[paymentMethodId].push(salesTaxId);
-    });
-
-    setPaymentMethodTaxMap(map);
+  if (methodsError) {
+    setStatusMessage(`Could not load payment methods: ${methodsError.message}`);
+    return;
   }
+
+  const methods: PaymentMethod[] = (methodsData || []).map((item: any) => ({
+    id: Number(item.id),
+    name: String(item.name),
+    active: item.active ?? null,
+  }));
+  setPaymentMethods(methods);
+
+  if (!selectedPaymentMethodId) {
+    const firstActive = methods.find((m) => m.active !== false);
+    if (firstActive) setSelectedPaymentMethodId(firstActive.id);
+  }
+
+  const { data: linkData, error: linkError } = await supabase
+    .from("payment_method_taxes")
+    .select("*");
+
+  if (linkError) {
+    setStatusMessage(`Could not load payment method taxes: ${linkError.message}`);
+    return;
+  }
+
+  const map: Record<number, number[]> = {};
+  (linkData || []).forEach((link: any) => {
+    const paymentMethodId = Number(link.payment_method_id);
+    const salesTaxId = Number(link.sales_tax_id);
+    if (!map[paymentMethodId]) map[paymentMethodId] = [];
+    map[paymentMethodId].push(salesTaxId);
+  });
+
+  setPaymentMethodTaxMap(map);
+}
 
   async function loadSalesTaxes() {
-    const { data, error } = await supabase
-      .from("sales_taxes")
-      .select("*")
-      .order("name", { ascending: true });
+  const { data, error } = await supabase
+    .from("sales_taxes")
+    .select("*")
+    .order("name", { ascending: true });
 
-    if (error) {
-      setStatusMessage(`Could not load sales taxes: ${error.message}`);
-      return;
-    }
-
-    setSalesTaxes(
-      (data || []).map((item: any) => ({
-        id: String(item.id),
-        name: String(item.name),
-        rate_percent: Number(item.rate_percent || 0),
-        active: item.active ?? null,
-      }))
-    );
+  if (error) {
+    setStatusMessage(`Could not load sales taxes: ${error.message}`);
+    return;
   }
+
+  setSalesTaxes(
+    (data || []).map((item: any) => ({
+      id: Number(item.id),
+      name: String(item.name),
+      rate_percent: Number(item.rate_percent || 0),
+      active: item.active ?? null,
+    }))
+  );
+}
 
   async function loadPromotions() {
     const { data, error } = await supabase
