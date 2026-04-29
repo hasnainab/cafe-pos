@@ -4,8 +4,8 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev --webpack",
-    "build": "next build",
+    "dev": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next dev --webpack",
+    "build": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",

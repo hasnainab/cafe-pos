@@ -45,10 +45,10 @@ function createMainWindow() {
     },
   });
 
-    if (isDev) {
+  if (isDev) {
     mainWindow.loadURL("http://localhost:3000");
   } else {
-    mainWindow.loadURL("https://www.spillthetea.vip");
+    mainWindow.loadURL("https://app.spillthetea.vip");
   }
 }
 
@@ -77,26 +77,29 @@ ipcMain.handle("print-settings:save", async (_event, settings) => {
   return savePrintSettings(settings);
 });
 
-ipcMain.handle("print:test", async (_event, { printerName, html }) => {
+ipcMain.handle("print:test", async (_event, { printerName, html, printOptions }) => {
   return await printHtmlToPrinter({
     printerName,
-    html: html || "<html><body style='font-family:Arial;padding:12px'>Test Print - Spill The Tea</body></html>",
+    html:
+      html ||
+      "<html><body style='font-family:Arial;padding:12px'>Test Print - Spill The Tea</body></html>",
+    printOptions,
   });
 });
 
-ipcMain.handle("print:receipt", async (_event, { printerName, html }) => {
-  return await printHtmlToPrinter({ printerName, html });
+ipcMain.handle("print:receipt", async (_event, { printerName, html, printOptions }) => {
+  return await printHtmlToPrinter({ printerName, html, printOptions });
 });
 
-ipcMain.handle("print:kitchen", async (_event, { printerName, html }) => {
-  return await printHtmlToPrinter({ printerName, html });
+ipcMain.handle("print:kitchen", async (_event, { printerName, html, printOptions }) => {
+  return await printHtmlToPrinter({ printerName, html, printOptions });
 });
 
-ipcMain.handle("print:stickers", async (_event, { printerName, html }) => {
-  return await printHtmlToPrinter({ printerName, html });
+ipcMain.handle("print:stickers", async (_event, { printerName, html, printOptions }) => {
+  return await printHtmlToPrinter({ printerName, html, printOptions });
 });
 
-async function printHtmlToPrinter({ printerName, html }) {
+async function printHtmlToPrinter({ printerName, html, printOptions = {} }) {
   return new Promise((resolve) => {
     const printWindow = new BrowserWindow({
       show: false,
@@ -105,30 +108,44 @@ async function printHtmlToPrinter({ printerName, html }) {
       },
     });
 
-    printWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(html)
-    );
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+      if (!printWindow.isDestroyed()) {
+        printWindow.close();
+      }
+    };
 
-    printWindow.webContents.on("did-finish-load", async () => {
-      printWindow.webContents.print(
-        {
-          silent: true,
-          printBackground: true,
-          deviceName: printerName || "",
-          margins: { marginType: "none" },
-          pageSize: "A4", // HTML/CSS can override layout; change for production if needed.
-        },
-        (success, failureReason) => {
-          if (!success) {
-            resolve({ ok: false, error: failureReason || "Print failed" });
-          } else {
-            resolve({ ok: true });
-          }
-          if (!printWindow.isDestroyed()) {
-            printWindow.close();
-          }
+    const timeout = setTimeout(() => {
+      finish({ ok: false, error: "Print timed out" });
+    }, 15000);
+
+    printWindow.webContents.once("did-finish-load", async () => {
+      const options = {
+        silent: true,
+        printBackground: true,
+        deviceName: printerName || "",
+        margins: { marginType: "none" },
+        ...printOptions,
+      };
+
+      printWindow.webContents.print(options, (success, failureReason) => {
+        clearTimeout(timeout);
+        if (!success) {
+          finish({ ok: false, error: failureReason || "Print failed" });
+        } else {
+          finish({ ok: true });
         }
-      );
+      });
     });
+
+    printWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription) => {
+      clearTimeout(timeout);
+      finish({ ok: false, error: errorDescription || `Failed to load print content (${errorCode})` });
+    });
+
+    printWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
   });
 }
