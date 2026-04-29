@@ -6571,16 +6571,22 @@ async function printOrderArtifacts(params: {
 
 
         {viewMode === "profitability" && (() => {
-          const periodStart = getPeriodStart(profitabilityPeriod);
+          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
+          const { start: profitStart, end: profitEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
           const filteredOrders = profitableOrders.filter((order: any) => {
             const stamp = order.completed_at || order.collected_at || order.updated_at || order.created_at;
             if (!stamp) return false;
-            return new Date(stamp) >= periodStart;
+            const stampDate = new Date(stamp);
+            return stampDate >= profitStart && stampDate <= profitEnd;
           });
 
-          const totalSales = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.total || 0), 0);
+          const totalGrossBilled = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.total || 0), 0);
+          const totalDiscounts = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.discount_total || 0), 0);
+          const totalSubtotal = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.subtotal || 0), 0);
+          const totalSales = Math.max(0, totalSubtotal - totalDiscounts);
+          const totalTax = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.tax_total || 0), 0);
           const totalCogs = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.cost_row?.actual_cogs || 0), 0);
-          const grossProfit = filteredOrders.reduce((sum: number, order: any) => sum + Number(order.cost_row?.gross_profit || 0), 0);
+          const grossProfit = totalSales - totalCogs;
           const contributionMargin = totalSales > 0 ? grossProfit / totalSales : 0;
           const fixedCostTotal = fixedCosts.reduce(
             (sum: number, cost) => sum + allocateFixedCostToPeriod(cost, profitabilityPeriod),
@@ -6623,28 +6629,55 @@ async function printOrderArtifacts(params: {
                   </p>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
-                  {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
-                    <button
-                      key={period}
-                      type="button"
-                      onClick={() => setProfitabilityPeriod(period)}
-                      className={`rounded-xl px-4 py-2 text-xs font-medium ${
-                        profitabilityPeriod === period
-                          ? "bg-rose-500 text-white shadow-sm"
-                          : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                      }`}
-                    >
-                      {period[0].toUpperCase() + period.slice(1)}
-                    </button>
-                  ))}
+                <div className="flex flex-col gap-2 sm:items-end">
+                  <div className="flex flex-wrap gap-2">
+                    {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => setProfitabilityPeriod(period)}
+                        className={`rounded-xl px-4 py-2 text-xs font-medium ${
+                          profitabilityPeriod === period
+                            ? "bg-rose-500 text-white shadow-sm"
+                            : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                        }`}
+                      >
+                        {period[0].toUpperCase() + period.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-rose-700/70">Anchor Date</span>
+                    <input
+                      type="date"
+                      value={reportAnchorDate}
+                      onChange={(e) => setReportAnchorDate(e.target.value)}
+                      className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs text-rose-700"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="mb-4 text-xs text-rose-700/70">
+                Showing {profitabilityPeriod} view for <span className="font-semibold">{profitStart.toLocaleDateString()}</span> to <span className="font-semibold">{profitEnd.toLocaleDateString()}</span>
+              </div>
+
+              <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                 <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">Sales</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">Net Sales</div>
                   <div className="mt-1 text-lg font-semibold">{formatCurrency(totalSales)}</div>
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">Gross Billed</div>
+                  <div className="mt-1 text-lg font-semibold">{formatCurrency(totalGrossBilled)}</div>
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">Tax Collected</div>
+                  <div className="mt-1 text-lg font-semibold">{formatCurrency(totalTax)}</div>
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">Discounts</div>
+                  <div className="mt-1 text-lg font-semibold">{formatCurrency(totalDiscounts)}</div>
                 </div>
                 <div className="rounded-xl border border-rose-100 bg-rose-50 p-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">COGS</div>
