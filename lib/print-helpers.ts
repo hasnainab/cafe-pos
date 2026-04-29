@@ -15,6 +15,7 @@ export type PosOrder = {
   payment_method_name?: string | null;
   subtotal: number;
   tax_total: number;
+  discount_total?: number;
   total: number;
   items: PosOrderItem[];
 
@@ -249,6 +250,7 @@ export function buildReceiptHtml(order: PosOrder, logoDataUrl?: string) {
           <div>Subtotal</div>
           <div>${money(order.subtotal)}</div>
         </div>
+        ${Number(order.discount_total || 0) > 0 ? `<div class="total-row"><div>Discount</div><div>- ${money(order.discount_total || 0)}</div></div>` : ""}
         <div class="total-row">
           <div>Tax</div>
           <div>${money(order.tax_total)}</div>
