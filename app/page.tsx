@@ -1048,6 +1048,9 @@ const canEditSetup = currentRole === "admin";
   const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
   const [cashReceivedInput, setCashReceivedInput] = useState("");
+  const [billDiscountMode, setBillDiscountMode] = useState<"none" | "percent" | "amount">("none");
+  const [billDiscountPercentInput, setBillDiscountPercentInput] = useState("");
+  const [billDiscountAmountInput, setBillDiscountAmountInput] = useState("");
 
   const [activeOrders, setActiveOrders] = useState<OrderView[]>([]);
   const [completedOrders, setCompletedOrders] = useState<OrderView[]>([]);
@@ -1971,6 +1974,32 @@ const canEditSetup = currentRole === "admin";
 
   const taxableSubtotalAfterRedemption = Math.max(0, cartSubtotal - redeemablePoints);
 
+  const billDiscountAmount = useMemo(() => {
+    if (billDiscountMode === "percent") {
+      const percent = Math.max(0, Math.min(100, Number(billDiscountPercentInput || 0)));
+      return (taxableSubtotalAfterRedemption * percent) / 100;
+    }
+
+    if (billDiscountMode === "amount") {
+      return Math.max(0, Number(billDiscountAmountInput || 0));
+    }
+
+    return 0;
+  }, [
+    billDiscountMode,
+    billDiscountPercentInput,
+    billDiscountAmountInput,
+    taxableSubtotalAfterRedemption,
+  ]);
+
+  const appliedBillDiscount = useMemo(() => {
+    return Math.min(taxableSubtotalAfterRedemption, billDiscountAmount);
+  }, [taxableSubtotalAfterRedemption, billDiscountAmount]);
+
+  const taxableSubtotalAfterDiscount = useMemo(() => {
+    return Math.max(0, taxableSubtotalAfterRedemption - appliedBillDiscount);
+  }, [taxableSubtotalAfterRedemption, appliedBillDiscount]);
+
   const selectedPaymentTaxes = useMemo(() => {
     if (!selectedPaymentMethodId) return [];
     const taxIds = paymentMethodTaxMap[selectedPaymentMethodId] || [];
@@ -1989,7 +2018,7 @@ const canEditSetup = currentRole === "admin";
 
   const taxBreakdown = useMemo(() => {
     return selectedPaymentTaxes.map((tax) => {
-      const amount = (taxableSubtotalAfterRedemption * Number(tax.rate_percent || 0)) / 100;
+      const amount = (taxableSubtotalAfterDiscount * Number(tax.rate_percent || 0)) / 100;
       return {
         id: tax.id,
         name: tax.name,
@@ -1997,7 +2026,7 @@ const canEditSetup = currentRole === "admin";
         amount,
       };
     });
-  }, [selectedPaymentTaxes, taxableSubtotalAfterRedemption]);
+  }, [selectedPaymentTaxes, taxableSubtotalAfterDiscount]);
 
   const cartTaxTotal = useMemo(
     () => taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0),
@@ -2005,8 +2034,8 @@ const canEditSetup = currentRole === "admin";
   );
 
   const cartGrandTotal = useMemo(
-    () => taxableSubtotalAfterRedemption + cartTaxTotal,
-    [taxableSubtotalAfterRedemption, cartTaxTotal]
+    () => taxableSubtotalAfterDiscount + cartTaxTotal,
+    [taxableSubtotalAfterDiscount, cartTaxTotal]
   );
 
   const cashReceived = Math.max(0, Number(cashReceivedInput || 0));
@@ -2023,9 +2052,9 @@ const canEditSetup = currentRole === "admin";
   const activePromotionMultiplier = Number(activePromotion?.multiplier || 1);
 
   const projectedPointsEarned = useMemo(() => {
-    const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
+    const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints - appliedBillDiscount);
     return (eligiblePaidAmount * currentRewardRate * activePromotionMultiplier) / 100;
-  }, [eligibleSubtotal, redeemablePoints, currentRewardRate, activePromotionMultiplier]);
+  }, [eligibleSubtotal, redeemablePoints, appliedBillDiscount, currentRewardRate, activePromotionMultiplier]);
 
   const filteredCustomers = useMemo(() => {
     const q = customersSearch.trim().toLowerCase();
@@ -4915,6 +4944,7 @@ async function printOrderArtifacts(params: {
     customer_name: params.customerNameForPrint,
     payment_method_name: params.paymentMethodName,
     subtotal: cartSubtotal,
+    discount_total: redeemablePoints + appliedBillDiscount,
     tax_total: cartTaxTotal,
     total: cartGrandTotal,
     logo_data_url: logoDataUrl || null,
@@ -5450,14 +5480,14 @@ async function printOrderArtifacts(params: {
     setSaving(true);
     try {
       const customer = customerPhone.trim() ? await ensureCustomer() : null;
-      const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
+      const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints - appliedBillDiscount);
 
       const baseOrderPayload = {
         status: "Preparing",
         total: cartGrandTotal,
         subtotal: cartSubtotal,
         tax_total: cartTaxTotal,
-        discount_total: redeemablePoints,
+        discount_total: redeemablePoints + appliedBillDiscount,
         points_earned: projectedPointsEarned,
         points_redeemed: redeemablePoints,
         eligible_subtotal: eligibleSubtotal,
@@ -6460,6 +6490,82 @@ async function printOrderArtifacts(params: {
                         onChange={(e) => setRedeemPointsInput(e.target.value)}
                         className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
                       />
+                    <div className="rounded-2xl border border-rose-200 bg-white p-3">
+                      <div className="mb-2 text-xs font-medium text-rose-700">Bill Discount</div>
+                      <div className="mb-3 grid grid-cols-4 gap-2">
+                        {[10, 15, 20].map((percent) => (
+                          <button
+                            key={percent}
+                            type="button"
+                            onClick={() => {
+                              setBillDiscountMode("percent");
+                              setBillDiscountPercentInput(String(percent));
+                              setBillDiscountAmountInput("");
+                            }}
+                            className={`rounded-xl border px-2 py-2 text-xs font-medium transition ${
+                              billDiscountMode === "percent" && Number(billDiscountPercentInput || 0) === percent
+                                ? "border-rose-500 bg-rose-500 text-white shadow-sm"
+                                : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
+                            }`}
+                          >
+                            {percent}%
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBillDiscountMode("none");
+                            setBillDiscountPercentInput("");
+                            setBillDiscountAmountInput("");
+                          }}
+                          className={`rounded-xl border px-2 py-2 text-xs font-medium transition ${
+                            billDiscountMode === "none"
+                              ? "border-slate-400 bg-slate-100 text-slate-900"
+                              : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
+                          }`}
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-[11px] font-medium text-rose-700/80">Discount %</label>
+                          <input
+                            value={billDiscountPercentInput}
+                            onChange={(e) => {
+                              setBillDiscountMode("percent");
+                              setBillDiscountPercentInput(e.target.value);
+                              setBillDiscountAmountInput("");
+                            }}
+                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+                            placeholder="Enter %"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] font-medium text-rose-700/80">Discount Amount</label>
+                          <input
+                            value={billDiscountAmountInput}
+                            onChange={(e) => {
+                              setBillDiscountMode("amount");
+                              setBillDiscountAmountInput(e.target.value);
+                              setBillDiscountPercentInput("");
+                            }}
+                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+                            placeholder="Enter Rs amount"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between text-xs">
+                        <span>Applied Discount</span>
+                        <span className="font-semibold">- {formatCurrency(appliedBillDiscount)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs">
+                      <span>Discount</span>
+                      <span>- {formatCurrency(appliedBillDiscount)}</span>
                     </div>
 
                     {taxBreakdown.map((tax) => (
