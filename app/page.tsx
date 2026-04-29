@@ -1048,9 +1048,6 @@ const canEditSetup = currentRole === "admin";
   const [selectedPosCategoryId, setSelectedPosCategoryId] = useState<string>("all");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
   const [cashReceivedInput, setCashReceivedInput] = useState("");
-  const [billDiscountMode, setBillDiscountMode] = useState<"none" | "percent" | "amount">("none");
-  const [billDiscountPercentInput, setBillDiscountPercentInput] = useState("");
-  const [billDiscountAmountInput, setBillDiscountAmountInput] = useState("");
 
   const [activeOrders, setActiveOrders] = useState<OrderView[]>([]);
   const [completedOrders, setCompletedOrders] = useState<OrderView[]>([]);
@@ -1231,6 +1228,7 @@ const canEditSetup = currentRole === "admin";
   const [inventoryMovements, setInventoryMovements] = useState<InventoryMovementRow[]>([]);
   const [selectedProfitOrderId, setSelectedProfitOrderId] = useState<string>("");
   const [profitabilityPeriod, setProfitabilityPeriod] = useState<"day" | "week" | "month" | "quarter" | "year">("day");
+  const [reportAnchorDate, setReportAnchorDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [fixedCosts, setFixedCosts] = useState<FixedCostRow[]>([]);
   const [fixedCostForm, setFixedCostForm] = useState({
     name: "",
@@ -1973,32 +1971,6 @@ const canEditSetup = currentRole === "admin";
 
   const taxableSubtotalAfterRedemption = Math.max(0, cartSubtotal - redeemablePoints);
 
-  const billDiscountAmount = useMemo(() => {
-    if (billDiscountMode === "percent") {
-      const percent = Math.max(0, Math.min(100, Number(billDiscountPercentInput || 0)));
-      return (taxableSubtotalAfterRedemption * percent) / 100;
-    }
-
-    if (billDiscountMode === "amount") {
-      return Math.max(0, Number(billDiscountAmountInput || 0));
-    }
-
-    return 0;
-  }, [
-    billDiscountMode,
-    billDiscountPercentInput,
-    billDiscountAmountInput,
-    taxableSubtotalAfterRedemption,
-  ]);
-
-  const appliedBillDiscount = useMemo(() => {
-    return Math.min(taxableSubtotalAfterRedemption, billDiscountAmount);
-  }, [taxableSubtotalAfterRedemption, billDiscountAmount]);
-
-  const taxableSubtotalAfterDiscount = useMemo(() => {
-    return Math.max(0, taxableSubtotalAfterRedemption - appliedBillDiscount);
-  }, [taxableSubtotalAfterRedemption, appliedBillDiscount]);
-
   const selectedPaymentTaxes = useMemo(() => {
     if (!selectedPaymentMethodId) return [];
     const taxIds = paymentMethodTaxMap[selectedPaymentMethodId] || [];
@@ -2017,7 +1989,7 @@ const canEditSetup = currentRole === "admin";
 
   const taxBreakdown = useMemo(() => {
     return selectedPaymentTaxes.map((tax) => {
-      const amount = (taxableSubtotalAfterDiscount * Number(tax.rate_percent || 0)) / 100;
+      const amount = (taxableSubtotalAfterRedemption * Number(tax.rate_percent || 0)) / 100;
       return {
         id: tax.id,
         name: tax.name,
@@ -2025,7 +1997,7 @@ const canEditSetup = currentRole === "admin";
         amount,
       };
     });
-  }, [selectedPaymentTaxes, taxableSubtotalAfterDiscount]);
+  }, [selectedPaymentTaxes, taxableSubtotalAfterRedemption]);
 
   const cartTaxTotal = useMemo(
     () => taxBreakdown.reduce((sum, tax) => sum + tax.amount, 0),
@@ -2033,8 +2005,8 @@ const canEditSetup = currentRole === "admin";
   );
 
   const cartGrandTotal = useMemo(
-    () => taxableSubtotalAfterDiscount + cartTaxTotal,
-    [taxableSubtotalAfterDiscount, cartTaxTotal]
+    () => taxableSubtotalAfterRedemption + cartTaxTotal,
+    [taxableSubtotalAfterRedemption, cartTaxTotal]
   );
 
   const cashReceived = Math.max(0, Number(cashReceivedInput || 0));
@@ -2051,9 +2023,9 @@ const canEditSetup = currentRole === "admin";
   const activePromotionMultiplier = Number(activePromotion?.multiplier || 1);
 
   const projectedPointsEarned = useMemo(() => {
-    const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints - appliedBillDiscount);
+    const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
     return (eligiblePaidAmount * currentRewardRate * activePromotionMultiplier) / 100;
-  }, [eligibleSubtotal, redeemablePoints, appliedBillDiscount, currentRewardRate, activePromotionMultiplier]);
+  }, [eligibleSubtotal, redeemablePoints, currentRewardRate, activePromotionMultiplier]);
 
   const filteredCustomers = useMemo(() => {
     const q = customersSearch.trim().toLowerCase();
@@ -4760,33 +4732,54 @@ const canEditSetup = currentRole === "admin";
     (movement) => String(movement.order_id || "") === String(selectedProfitOrder?.id || "")
   );
 
-  function getPeriodStart(period: "day" | "week" | "month" | "quarter" | "year", now = new Date()) {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
+  function getPeriodRange(period: "day" | "week" | "month" | "quarter" | "year", anchor = new Date()) {
+    const start = new Date(anchor);
+    start.setHours(0, 0, 0, 0);
 
-    if (period === "day") return d;
+    if (period === "day") {
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      end.setMilliseconds(end.getMilliseconds() - 1);
+      return { start, end };
+    }
 
     if (period === "week") {
-      const day = d.getDay();
+      const day = start.getDay();
       const diff = (day + 6) % 7;
-      d.setDate(d.getDate() - diff);
-      return d;
+      start.setDate(start.getDate() - diff);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 7);
+      end.setMilliseconds(end.getMilliseconds() - 1);
+      return { start, end };
     }
 
     if (period === "month") {
-      d.setDate(1);
-      return d;
+      start.setDate(1);
+      const end = new Date(start);
+      end.setMonth(end.getMonth() + 1);
+      end.setMilliseconds(end.getMilliseconds() - 1);
+      return { start, end };
     }
 
     if (period === "quarter") {
-      const month = d.getMonth();
+      const month = start.getMonth();
       const quarterStartMonth = Math.floor(month / 3) * 3;
-      d.setMonth(quarterStartMonth, 1);
-      return d;
+      start.setMonth(quarterStartMonth, 1);
+      const end = new Date(start);
+      end.setMonth(end.getMonth() + 3);
+      end.setMilliseconds(end.getMilliseconds() - 1);
+      return { start, end };
     }
 
-    d.setMonth(0, 1);
-    return d;
+    start.setMonth(0, 1);
+    const end = new Date(start);
+    end.setFullYear(end.getFullYear() + 1);
+    end.setMilliseconds(end.getMilliseconds() - 1);
+    return { start, end };
+  }
+
+  function getPeriodStart(period: "day" | "week" | "month" | "quarter" | "year", now = new Date()) {
+    return getPeriodRange(period, now).start;
   }
 
   function allocateFixedCostToPeriod(cost: FixedCostRow, period: "day" | "week" | "month" | "quarter" | "year") {
@@ -4922,7 +4915,6 @@ async function printOrderArtifacts(params: {
     customer_name: params.customerNameForPrint,
     payment_method_name: params.paymentMethodName,
     subtotal: cartSubtotal,
-    discount_total: redeemablePoints + appliedBillDiscount,
     tax_total: cartTaxTotal,
     total: cartGrandTotal,
     logo_data_url: logoDataUrl || null,
@@ -5458,14 +5450,14 @@ async function printOrderArtifacts(params: {
     setSaving(true);
     try {
       const customer = customerPhone.trim() ? await ensureCustomer() : null;
-      const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints - appliedBillDiscount);
+      const eligiblePaidAmount = Math.max(0, eligibleSubtotal - redeemablePoints);
 
       const baseOrderPayload = {
         status: "Preparing",
         total: cartGrandTotal,
         subtotal: cartSubtotal,
         tax_total: cartTaxTotal,
-        discount_total: redeemablePoints + appliedBillDiscount,
+        discount_total: redeemablePoints,
         points_earned: projectedPointsEarned,
         points_redeemed: redeemablePoints,
         eligible_subtotal: eligibleSubtotal,
@@ -6470,84 +6462,6 @@ async function printOrderArtifacts(params: {
                       />
                     </div>
 
-                    <div className="rounded-2xl border border-rose-200 bg-white p-3">
-                      <div className="mb-2 text-xs font-medium text-rose-700">Bill Discount</div>
-                      <div className="mb-3 grid grid-cols-4 gap-2">
-                        {[10, 15, 20].map((percent) => (
-                          <button
-                            key={percent}
-                            type="button"
-                            onClick={() => {
-                              setBillDiscountMode("percent");
-                              setBillDiscountPercentInput(String(percent));
-                              setBillDiscountAmountInput("");
-                            }}
-                            className={`rounded-xl border px-2 py-2 text-xs font-medium transition ${
-                              billDiscountMode === "percent" && Number(billDiscountPercentInput || 0) === percent
-                                ? "border-rose-500 bg-rose-500 text-white shadow-sm"
-                                : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
-                            }`}
-                          >
-                            {percent}%
-                          </button>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBillDiscountMode("none");
-                            setBillDiscountPercentInput("");
-                            setBillDiscountAmountInput("");
-                          }}
-                          className={`rounded-xl border px-2 py-2 text-xs font-medium transition ${
-                            billDiscountMode === "none"
-                              ? "border-slate-400 bg-slate-100 text-slate-900"
-                              : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
-                          }`}
-                        >
-                          Clear
-                        </button>
-                      </div>
-
-                      <div className="grid gap-2 md:grid-cols-2">
-                        <div>
-                          <label className="mb-1 block text-[11px] font-medium text-rose-700/80">Discount %</label>
-                          <input
-                            value={billDiscountPercentInput}
-                            onChange={(e) => {
-                              setBillDiscountMode("percent");
-                              setBillDiscountPercentInput(e.target.value);
-                              setBillDiscountAmountInput("");
-                            }}
-                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
-                            placeholder="Enter %"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[11px] font-medium text-rose-700/80">Discount Amount</label>
-                          <input
-                            value={billDiscountAmountInput}
-                            onChange={(e) => {
-                              setBillDiscountMode("amount");
-                              setBillDiscountAmountInput(e.target.value);
-                              setBillDiscountPercentInput("");
-                            }}
-                            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
-                            placeholder="Enter Rs amount"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-2 flex items-center justify-between text-xs">
-                        <span>Applied Discount</span>
-                        <span className="font-semibold">- {formatCurrency(appliedBillDiscount)}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between text-xs">
-                      <span>Discount</span>
-                      <span>- {formatCurrency(appliedBillDiscount)}</span>
-                    </div>
-
                     {taxBreakdown.map((tax) => (
                       <div key={tax.id} className="flex items-center justify-between text-xs">
                         <span>
@@ -6965,30 +6879,33 @@ async function printOrderArtifacts(params: {
         })()}
 
         {viewMode === "reports" && canViewReports && (() => {
-          const reportStart = getPeriodStart(profitabilityPeriod);
+          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
+          const { start: reportStart, end: reportEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
           const reportOrders = completedOrders.filter((order) => {
             const stamp = order.collected_at || order.ready_at || order.created_at;
             if (!stamp) return false;
-            return new Date(stamp) >= reportStart;
+            const stampDate = new Date(stamp);
+            return stampDate >= reportStart && stampDate <= reportEnd;
           });
 
           const reportOrderIds = new Set(reportOrders.map((order) => Number(order.id)));
-          const reportSalesTotal = reportOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+          const reportGrossBilledTotal = reportOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
           const reportSubtotalTotal = reportOrders.reduce((sum, order) => sum + Number(order.subtotal || 0), 0);
           const reportTaxTotal = reportOrders.reduce((sum, order) => sum + Number(order.tax_total || 0), 0);
           const reportDiscountTotal = reportOrders.reduce((sum, order) => sum + Number(order.discount_total || 0), 0);
+          const reportNetSalesTotal = Math.max(0, reportSubtotalTotal - reportDiscountTotal);
           const reportPointsEarnedTotal = reportOrders.reduce((sum, order) => sum + Number(order.points_earned || 0), 0);
           const reportPointsRedeemedTotal = reportOrders.reduce((sum, order) => sum + Number(order.points_redeemed || 0), 0);
-          const reportAverageOrderValue = reportOrders.length > 0 ? reportSalesTotal / reportOrders.length : 0;
+          const reportAverageOrderValue = reportOrders.length > 0 ? reportNetSalesTotal / reportOrders.length : 0;
 
-          const periodDays = Math.max(1, Math.ceil((Date.now() - reportStart.getTime()) / 86400000));
+          const periodDays = Math.max(1, Math.ceil((reportEnd.getTime() - reportStart.getTime() + 1) / 86400000));
           const avgOrdersPerDay = reportOrders.length / periodDays;
-          const avgSalesPerDay = reportSalesTotal / periodDays;
+          const avgSalesPerDay = reportNetSalesTotal / periodDays;
 
           const reportProfitableOrders = profitableOrders.filter((order: any) => reportOrderIds.has(Number(order.id)));
           const reportCogsTotal = reportProfitableOrders.reduce((sum: number, order: any) => sum + Number(order.cost_row?.actual_cogs || 0), 0);
-          const reportGrossProfit = reportProfitableOrders.reduce((sum: number, order: any) => sum + Number(order.cost_row?.gross_profit || 0), 0);
-          const reportMargin = reportSalesTotal > 0 ? reportGrossProfit / reportSalesTotal : 0;
+          const reportGrossProfit = reportNetSalesTotal - reportCogsTotal;
+          const reportMargin = reportNetSalesTotal > 0 ? reportGrossProfit / reportNetSalesTotal : 0;
 
           const itemSalesMap = new Map<string, { name: string; qty: number; sales: number; orders: number }>();
           reportOrders.forEach((order) => {
@@ -7008,7 +6925,7 @@ async function printOrderArtifacts(params: {
             const key = String(order.payment_method_name || 'Unknown');
             const current = paymentMixMap.get(key) || { name: key, orders: 0, sales: 0 };
             current.orders += 1;
-            current.sales += Number(order.total || 0);
+            current.sales += Math.max(0, Number(order.subtotal || 0) - Number(order.discount_total || 0));
             paymentMixMap.set(key, current);
           });
           const paymentMixRows = Array.from(paymentMixMap.values()).sort((a, b) => b.sales - a.sales);
@@ -7090,32 +7007,51 @@ async function printOrderArtifacts(params: {
                   <div>
                     <h2 className="text-2xl font-semibold">Management Reports & Forecasts</h2>
                     <p className="mt-1 text-xs text-rose-700/70">
-                      Track sales, mix, consumption, profit, and forward-looking stock and purchasing needs using the same operational data already captured in the POS.
+                      Track sales, mix, consumption, profit, && forward-looking stock && purchasing needs using the same operational data already captured in the POS.
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
-                      <button
-                        key={period}
-                        type="button"
-                        onClick={() => setProfitabilityPeriod(period)}
-                        className={`rounded-xl px-4 py-2 text-xs font-medium ${
-                          profitabilityPeriod === period
-                            ? "bg-rose-500 text-white shadow-sm"
-                            : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                        }`}
-                      >
-                        {period[0].toUpperCase() + period.slice(1)}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">
+                        Anchor Date
+                      </label>
+                      <input
+                        type="date"
+                        value={reportAnchorDate}
+                        onChange={(e) => setReportAnchorDate(e.target.value)}
+                        className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm text-rose-700"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
+                        <button
+                          key={period}
+                          type="button"
+                          onClick={() => setProfitabilityPeriod(period)}
+                          className={`rounded-xl px-4 py-2 text-xs font-medium ${
+                            profitabilityPeriod === period
+                              ? "bg-rose-500 text-white shadow-sm"
+                              : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                          }`}
+                        >
+                          {period[0].toUpperCase() + period.slice(1)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+                </div>
+
+                <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700/80">
+                  Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStart.toLocaleDateString()}</span> to <span className="font-semibold">{reportEnd.toLocaleDateString()}</span>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
                   {[
                     ["Orders", String(reportOrders.length)],
-                    ["Sales", formatCurrency(reportSalesTotal)],
+                    ["Net Sales", formatCurrency(reportNetSalesTotal)],
+                    ["Gross Billed", formatCurrency(reportGrossBilledTotal)],
                     ["Avg Order Value", formatCurrency(reportAverageOrderValue)],
                     ["COGS", formatCurrency(reportCogsTotal)],
                     ["Gross Profit", formatCurrency(reportGrossProfit)],
@@ -7125,7 +7061,7 @@ async function printOrderArtifacts(params: {
                     ["Points Earned", Number(reportPointsEarnedTotal).toFixed(0)],
                     ["Points Redeemed", Number(reportPointsRedeemedTotal).toFixed(0)],
                     ["Avg Orders / Day", avgOrdersPerDay.toFixed(1)],
-                    ["Avg Sales / Day", formatCurrency(avgSalesPerDay)],
+                    ["Avg Net Sales / Day", formatCurrency(avgSalesPerDay)],
                   ].map(([label, value]) => (
                     <div key={label} className="rounded-xl border border-rose-100 bg-rose-50 p-3">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">{label}</div>
@@ -7155,12 +7091,12 @@ async function printOrderArtifacts(params: {
                       <tbody>
                         {topSellingItems.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="px-3 py-4 text-rose-700/70">No completed sales in this period.</td>
+                            <td colSpan={5} className="px-3 py-4 text-rose-700/70">No completed sales found in this period.</td>
                           </tr>
                         ) : (
-                          topSellingItems.map((item, index) => (
+                          topSellingItems.slice(0, 15).map((item, index) => (
                             <tr key={item.name} className="border-b last:border-b-0">
-                              <td className="px-3 py-2 font-medium">#{index + 1}</td>
+                              <td className="px-3 py-2">#{index + 1}</td>
                               <td className="px-3 py-2 font-medium">{item.name}</td>
                               <td className="px-3 py-2">{item.qty}</td>
                               <td className="px-3 py-2">{formatCurrency(item.sales)}</td>
@@ -7176,23 +7112,26 @@ async function printOrderArtifacts(params: {
                 <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <h3 className="text-xl font-semibold">Payment Mix</h3>
-                    <div className="text-xs text-rose-700/70">By completed sales</div>
+                    <div className="text-xs text-rose-700/70">By net sales</div>
                   </div>
                   <div className="space-y-3">
                     {paymentMixRows.length === 0 ? (
-                      <p className="text-rose-700/70">No payment data yet.</p>
+                      <div className="text-sm text-rose-700/70">No payment data for this period.</div>
                     ) : (
                       paymentMixRows.map((row) => {
-                        const share = reportSalesTotal > 0 ? row.sales / reportSalesTotal : 0;
+                        const percent = reportNetSalesTotal > 0 ? (row.sales / reportNetSalesTotal) * 100 : 0;
                         return (
-                          <div key={row.name} className="rounded-xl border border-rose-100 p-3">
-                            <div className="flex items-center justify-between gap-3">
+                          <div key={row.name} className="rounded-xl border border-rose-100 bg-rose-50 p-3">
+                            <div className="mb-2 flex items-center justify-between gap-3">
                               <div className="font-medium">{row.name}</div>
-                              <div className="font-semibold">{formatCurrency(row.sales)}</div>
+                              <div className="text-sm font-semibold">{formatCurrency(row.sales)}</div>
                             </div>
-                            <div className="mt-1 text-xs text-rose-700/70">Orders {row.orders} · Share {(share * 100).toFixed(1)}%</div>
-                            <div className="mt-2 h-2 overflow-hidden rounded-full bg-rose-100">
-                              <div className="h-full rounded-full bg-rose-400" style={{ width: `${Math.max(4, share * 100)}%` }} />
+                            <div className="h-2 overflow-hidden rounded-full bg-white">
+                              <div className="h-full rounded-full bg-rose-500" style={{ width: `${Math.min(100, percent)}%` }} />
+                            </div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-rose-700/70">
+                              <span>{row.orders} orders</span>
+                              <span>{percent.toFixed(1)}%</span>
                             </div>
                           </div>
                         );
@@ -7285,7 +7224,7 @@ async function printOrderArtifacts(params: {
                     </p>
                   </div>
                   <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs text-rose-700/80">
-                    Forecast basis: {periodDays} day{periodDays === 1 ? '' : 's'} of completed sales and recorded usage
+                    Forecast basis: {periodDays} day{periodDays === 1 ? '' : 's'} of completed sales && recorded usage
                   </div>
                 </div>
                 <div className="overflow-x-auto">
@@ -7305,7 +7244,7 @@ async function printOrderArtifacts(params: {
                     <tbody>
                       {lowStockForecastRows.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-3 py-4 text-rose-700/70">No forecast data yet. Complete some sales and recipe deductions first.</td>
+                          <td colSpan={8} className="px-3 py-4 text-rose-700/70">No forecast data yet. Complete some sales && recipe deductions first.</td>
                         </tr>
                       ) : (
                         lowStockForecastRows.map((row) => {
