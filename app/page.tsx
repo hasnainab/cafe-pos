@@ -7306,11 +7306,13 @@ async function printOrderArtifacts(params: {
         })()}
 
         {viewMode === "dayClose" && canViewReports && (() => {
-          const closeStart = getPeriodStart(profitabilityPeriod);
+          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
+          const { start: closeStart, end: closeEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
           const closeOrders = completedOrders.filter((order) => {
             const stamp = order.collected_at || order.ready_at || order.created_at;
             if (!stamp) return false;
-            return new Date(stamp) >= closeStart;
+            const stampDate = new Date(stamp);
+            return stampDate >= closeStart && stampDate <= closeEnd;
           });
           const paymentSummary = Array.from(
             closeOrders.reduce((map, order) => {
@@ -7339,26 +7341,42 @@ async function printOrderArtifacts(params: {
           return (
             <div className="space-y-6">
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
-                <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                   <div>
                     <h2 className="text-2xl font-semibold">Day Close / Shift Close</h2>
                     <p className="mt-1 text-xs text-rose-700/70">Use this screen to reconcile the drawer, review sales mix, record deposits, and decide the float kept for the next day. Next day opening cash should be entered separately and will often differ from total closing cash.</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
-                      <button
-                        key={period}
-                        type="button"
-                        onClick={() => setProfitabilityPeriod(period)}
-                        className={`rounded-xl px-4 py-2 text-xs font-medium ${
-                          profitabilityPeriod === period
-                            ? "bg-rose-500 text-white shadow-sm"
-                            : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
-                        }`}
-                      >
-                        {period[0].toUpperCase() + period.slice(1)}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-3 xl:items-end">
+                    <div className="flex flex-wrap gap-2">
+                      <div className="rounded-xl border border-rose-200 bg-white px-3 py-2">
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">
+                          Anchor Date
+                        </label>
+                        <input
+                          type="date"
+                          value={reportAnchorDate}
+                          onChange={(e) => setReportAnchorDate(e.target.value)}
+                          className="rounded-lg border px-3 py-2 text-sm"
+                        />
+                      </div>
+                      {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
+                        <button
+                          key={period}
+                          type="button"
+                          onClick={() => setProfitabilityPeriod(period)}
+                          className={`rounded-xl px-4 py-2 text-xs font-medium ${
+                            profitabilityPeriod === period
+                              ? "bg-rose-500 text-white shadow-sm"
+                              : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                          }`}
+                        >
+                          {period[0].toUpperCase() + period.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-xs text-rose-700/70">
+                      Showing {profitabilityPeriod} view for <span className="font-semibold">{closeStart.toLocaleDateString()}</span> to <span className="font-semibold">{closeEnd.toLocaleDateString()}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -7499,12 +7517,15 @@ async function printOrderArtifacts(params: {
         })()}
 
         {viewMode === "reorder" && canViewReports && (() => {
-          const reportStart = getPeriodStart(profitabilityPeriod);
+          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
+          const { start: reportStart, end: reportEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
           const reportOrderIds = new Set(
             completedOrders
               .filter((order) => {
                 const stamp = order.collected_at || order.ready_at || order.created_at;
-                return stamp ? new Date(stamp) >= reportStart : false;
+                if (!stamp) return false;
+                const stampDate = new Date(stamp);
+                return stampDate >= reportStart && stampDate <= reportEnd;
               })
               .map((order) => Number(order.id))
           );
@@ -7512,7 +7533,7 @@ async function printOrderArtifacts(params: {
             if (!movement.order_id || !reportOrderIds.has(Number(movement.order_id))) return false;
             return String(movement.movement_type || "").toLowerCase() === "sale_deduction";
           });
-          const periodDays = Math.max(1, Math.ceil((Date.now() - reportStart.getTime()) / 86400000));
+          const periodDays = Math.max(1, Math.ceil((reportEnd.getTime() - reportStart.getTime() + 1) / 86400000));
           const reorderRows = inventoryItems.map((item) => {
             const itemMovements = saleMovements.filter((movement) => Number(movement.inventory_item_id) === Number(item.id));
             const rawUsage = itemMovements.reduce((sum, movement) => sum + Math.abs(Number(movement.quantity_change || 0)), 0);
@@ -7558,17 +7579,33 @@ async function printOrderArtifacts(params: {
           return (
             <div className="space-y-6">
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
-                <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                   <div>
                     <h2 className="text-2xl font-semibold">Purchase Orders / Reorder Planning</h2>
                     <p className="mt-1 text-xs text-rose-700/70">Use actual usage trends plus current stock to decide what to buy next and roughly how much cash each vendor order will require.</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
-                      <button key={period} type="button" onClick={() => setProfitabilityPeriod(period)} className={`rounded-xl px-4 py-2 text-xs font-medium ${profitabilityPeriod === period ? "bg-rose-500 text-white shadow-sm" : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"}`}>
-                        {period[0].toUpperCase() + period.slice(1)}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-3 xl:items-end">
+                    <div className="flex flex-wrap gap-2">
+                      <div className="rounded-xl border border-rose-200 bg-white px-3 py-2">
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-rose-700/70">
+                          Anchor Date
+                        </label>
+                        <input
+                          type="date"
+                          value={reportAnchorDate}
+                          onChange={(e) => setReportAnchorDate(e.target.value)}
+                          className="rounded-lg border px-3 py-2 text-sm"
+                        />
+                      </div>
+                      {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
+                        <button key={period} type="button" onClick={() => setProfitabilityPeriod(period)} className={`rounded-xl px-4 py-2 text-xs font-medium ${profitabilityPeriod === period ? "bg-rose-500 text-white shadow-sm" : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"}`}>
+                          {period[0].toUpperCase() + period.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-xs text-rose-700/70">
+                      Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStart.toLocaleDateString()}</span> to <span className="font-semibold">{reportEnd.toLocaleDateString()}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
