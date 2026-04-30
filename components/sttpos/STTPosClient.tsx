@@ -10,6 +10,8 @@ import {
   buildStickerHtml,
   expandDrinkStickers,
 } from "../../lib/print-helpers";
+import ProductModifierModal from "./ProductModifierModal";
+import ActiveOrderQueueCard from "./ActiveOrderQueueCard";
 
 type Category = {
   id: string;
@@ -5914,55 +5916,16 @@ async function printOrderArtifacts(params: {
     );
 
     return (
-      <div
+      <ActiveOrderQueueCard
         key={`summary-${order.id}`}
-        className="rounded-xl border border-rose-200 bg-white p-2 shadow-sm"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold text-rose-950">
-              {order.customer?.name || "Guest"}
-            </div>
-            <div className="mt-1 truncate text-xs text-rose-700/70">
-              {order.order_number}
-            </div>
-          </div>
-
-          <div className="shrink-0 rounded-lg bg-rose-50 px-2 py-1 text-right">
-            <div className="text-[10px] uppercase tracking-wide text-rose-700/70">
-              Time
-            </div>
-            <div className="text-xs font-bold leading-4 text-rose-600">
-              {mounted ? formatDurationFromSeconds(ageSeconds) : "-"}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={() => setSelectedQueueOrder(order)}
-            className="flex-1 rounded-lg border border-rose-200 bg-white px-2 py-1.5 text-[10px] font-medium text-rose-700 hover:bg-rose-50"
-          >
-            Details
-          </button>
-
-          {order.status === "Ready" ? (
-            <button
-              onClick={() => markOrderCollected(order.id)}
-              className="flex-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-[10px] font-semibold text-white"
-            >
-              Completed
-            </button>
-          ) : (
-            <button
-              onClick={() => markOrderReady(order.id)}
-              className="flex-1 rounded-lg bg-rose-500 px-2 py-1.5 text-[10px] font-semibold text-white"
-            >
-              Ready
-            </button>
-          )}
-        </div>
-      </div>
+        order={order}
+        mounted={mounted}
+        ageSeconds={ageSeconds}
+        formatDurationFromSeconds={formatDurationFromSeconds}
+        onDetails={() => setSelectedQueueOrder(order)}
+        onReady={() => markOrderReady(order.id)}
+        onCollected={() => markOrderCollected(order.id)}
+      />
     );
   }
 
@@ -5972,6 +5935,82 @@ async function printOrderArtifacts(params: {
     } finally {
       router.push("/login");
     }
+  }
+
+  function exportDayCloseReportCsv() {
+    const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
+    const { start: closeStart, end: closeEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
+    const closeOrders = completedOrders.filter((order) => {
+      const stamp = order.collected_at || order.ready_at || order.created_at;
+      if (!stamp) return false;
+      const stampDate = new Date(stamp);
+      return stampDate >= closeStart && stampDate <= closeEnd;
+    });
+
+    const paymentSummary = Array.from(
+      closeOrders.reduce((map, order) => {
+        const key = String(order.payment_method_name || "Unknown");
+        const current = map.get(key) || { method: key, orders: 0, total: 0 };
+        current.orders += 1;
+        current.total += Number(order.total || 0);
+        map.set(key, current);
+        return map;
+      }, new Map<string, { method: string; orders: number; total: number }>()).values()
+    ).sort((a, b) => b.total - a.total);
+
+    const cashSales = paymentSummary
+      .filter((row) => row.method.toLowerCase().includes("cash"))
+      .reduce((sum, row) => sum + row.total, 0);
+    const nonCashSales = paymentSummary.reduce((sum, row) => sum + row.total, 0) - cashSales;
+    const openingCash = Number(dayCloseOpeningCashInput || 0);
+    const actualCash = Number(dayCloseActualCashInput || 0);
+    const depositCash = Math.max(0, Number(dayCloseDepositCashInput || 0));
+    const floatCash = Math.max(0, Number(dayCloseFloatCashInput || 0));
+    const expectedDrawerCash = openingCash + cashSales;
+    const drawerVariance = actualCash - expectedDrawerCash;
+    const remainingAfterDeposit = actualCash - depositCash;
+    const compsAndDiscounts = closeOrders.reduce((sum, order) => sum + Number(order.discount_total || 0), 0);
+    const averageTicket = closeOrders.length > 0 ? closeOrders.reduce((sum, order) => sum + Number(order.total || 0), 0) / closeOrders.length : 0;
+
+    const rows = [
+      ["STT Day Close Report"],
+      ["Period", profitabilityPeriod],
+      ["Start", closeStart.toLocaleString()],
+      ["End", closeEnd.toLocaleString()],
+      [],
+      ["Summary"],
+      ["Orders Closed", closeOrders.length],
+      ["Cash Sales", cashSales],
+      ["Non Cash Sales", nonCashSales],
+      ["Discounts / Comps", compsAndDiscounts],
+      ["Average Ticket", averageTicket],
+      [],
+      ["Drawer"],
+      ["Opening Cash", openingCash],
+      ["Expected Drawer Cash", expectedDrawerCash],
+      ["Actual Cash Counted", actualCash],
+      ["Short / Over", drawerVariance],
+      ["Cash to Deposit", depositCash],
+      ["Cash Kept as Float", floatCash],
+      ["Remaining After Deposit", remainingAfterDeposit],
+      [],
+      ["Payment Method", "Orders", "Amount"],
+      ...paymentSummary.map((row) => [row.method, row.orders, row.total]),
+      [],
+      ["Difference Notes", dayCloseDifferenceNotes],
+      ["General Close Notes", dayCloseNotes],
+    ];
+
+    const csv = rows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `stt-day-close-${reportAnchorDate || new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   const navButton = (mode: ViewMode, label: string) => (
@@ -7467,6 +7506,13 @@ async function printOrderArtifacts(params: {
                           className="rounded-lg border px-3 py-2 text-sm"
                         />
                       </div>
+                      <button
+                        type="button"
+                        onClick={exportDayCloseReportCsv}
+                        className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                      >
+                        Export Close CSV
+                      </button>
                       {(["day", "week", "month", "quarter", "year"] as const).map((period) => (
                         <button
                           key={period}
@@ -10405,86 +10451,17 @@ async function printOrderArtifacts(params: {
         ) : null}
 
         {selectedProductForCart ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-rose-950/20 p-4">
-            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-rose-200 bg-white p-6 shadow-2xl">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-3xl font-bold text-rose-950">{selectedProductForCart.name}</h3>
-                  <div className="mt-1 text-sm text-rose-700/70">{formatCurrency(selectedProductForCart.price)}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={resetLineBuilder}
-                  className="rounded-xl border border-rose-200 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                >
-                  Cancel
-                </button>
-              </div>
-
-              <div className="mt-6 space-y-5">
-                <div>
-                  <div className="mb-2 text-sm font-medium">Modifiers</div>
-                  {activeProductModifiers.length > 0 ? (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {activeProductModifiers.map((mod) => {
-                        const selected = selectedModifierIds.includes(mod.id);
-                        return (
-                          <button
-                            key={mod.id}
-                            type="button"
-                            onClick={() =>
-                              setSelectedModifierIds((prev) =>
-                                selected ? prev.filter((id) => id !== mod.id) : [...prev, mod.id]
-                              )
-                            }
-                            className={`rounded-xl border px-3 py-3 text-left text-sm transition ${
-                              selected
-                                ? "border-slate-900 bg-rose-500 text-white"
-                                : "border-rose-200 bg-white hover:border-rose-300"
-                            }`}
-                          >
-                            <div className="font-medium">{mod.name}</div>
-                            <div className={selected ? "text-rose-100" : "text-rose-700/70"}>
-                              {formatCurrency(mod.price_delta)}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="rounded-xl bg-rose-50 p-4 text-sm text-rose-700/70">
-                      No modifiers are linked to this product yet. Go to Setup and add modifiers to this product.
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-medium">Notes</label>
-                  <input
-                    value={lineNotes}
-                    onChange={(e) => setLineNotes(e.target.value)}
-                    className="w-full rounded-xl border px-3 py-2"
-                    placeholder="Special instructions"
-                  />
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={addSelectedProductToCart}
-                    className="rounded-xl bg-rose-500 px-5 py-3 text-sm font-medium text-white"
-                  >
-                    Add to Cart
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetLineBuilder}
-                    className="rounded-xl border border-rose-200 px-5 py-3 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ProductModifierModal
+            product={selectedProductForCart}
+            modifiers={activeProductModifiers}
+            selectedModifierIds={selectedModifierIds}
+            setSelectedModifierIds={setSelectedModifierIds}
+            lineNotes={lineNotes}
+            setLineNotes={setLineNotes}
+            onAddToCart={addSelectedProductToCart}
+            onClose={resetLineBuilder}
+            formatCurrency={formatCurrency}
+          />
         ) : null}
 
         <section className="rounded-2xl bg-white p-4 text-sm text-rose-700/70 shadow-sm">
