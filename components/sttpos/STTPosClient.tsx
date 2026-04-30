@@ -542,6 +542,17 @@ function makeStockIntakeRow(seed: number): StockIntakeRowForm {
 }
 
 
+type SimpleStockIntakeForm = {
+  inventory_item_id: string;
+  vendor_id: string;
+  quantity: string;
+  unit_cost: string;
+  delivery_date: string;
+  invoice_number: string;
+  amount_paid_today: string;
+  notes: string;
+};
+
 type InventoryBatchRowForm = {
   row_id: string;
   selected_item_id: string;
@@ -1028,10 +1039,12 @@ const currentRole = normalizeRole(staffProfile?.role);
 const canViewCustomers = currentRole === "admin" || currentRole === "manager";
 const canViewReports = currentRole === "admin" || currentRole === "manager";
 const canViewSetup = currentRole === "admin";
-const canViewInventory = currentRole === "admin";
+const canViewInventory = currentRole === "admin" || currentRole === "manager";
 const canViewRecipes = currentRole === "admin";
 const canEditCustomerBonus = currentRole === "admin" || currentRole === "manager";
 const canEditSetup = currentRole === "admin";
+const canApplyDiscount = currentRole === "admin" || currentRole === "manager";
+const canUseInventoryIntake = currentRole === "admin" || currentRole === "manager";
 
   const [viewMode, setViewMode] = useState<ViewMode>("pos");
 
@@ -1729,6 +1742,7 @@ const canEditSetup = currentRole === "admin";
         throw new Error(`Could not save recipe: ${insertError.message}`);
       }
 
+      await recordAuditLog("recipe_saved", "product", productId, { ingredient_count: payload.length });
       setStatusMessage("Product recipe saved");
       await loadProductRecipes(productId);
       await loadAllProductRecipes();
@@ -1814,6 +1828,17 @@ const canEditSetup = currentRole === "admin";
   const [stockIntakeRows, setStockIntakeRows] = useState<StockIntakeRowForm[]>([
     makeStockIntakeRow(1),
   ]);
+
+  const [simpleStockIntakeForm, setSimpleStockIntakeForm] = useState<SimpleStockIntakeForm>({
+    inventory_item_id: "",
+    vendor_id: "",
+    quantity: "",
+    unit_cost: "",
+    delivery_date: new Date().toISOString().slice(0, 10),
+    invoice_number: "",
+    amount_paid_today: "",
+    notes: "",
+  });
 
   const [selectedShipmentHistoryId, setSelectedShipmentHistoryId] = useState<string>("");
   const [stockIntakeHistoryFilterVendorId, setStockIntakeHistoryFilterVendorId] = useState<string>("");
@@ -2121,6 +2146,47 @@ const canEditSetup = currentRole === "admin";
       },
     ];
   }, [filteredPosProducts, posCategoryOptions, selectedPosCategoryId]);
+
+  const inventoryItemById = useMemo(() => {
+    const map = new Map<number, InventoryItem>();
+    inventoryItems.forEach((item) => map.set(Number(item.id), item));
+    return map;
+  }, [inventoryItems]);
+
+  const recipeRowsByProductId = useMemo(() => {
+    const map = new Map<number, ProductRecipeDbRow[]>();
+    allProductRecipes.forEach((recipe) => {
+      const productId = Number(recipe.product_id || 0);
+      if (!map.has(productId)) map.set(productId, []);
+      map.get(productId)!.push(recipe);
+    });
+    return map;
+  }, [allProductRecipes]);
+
+  function getProductStockWarning(productId: number) {
+    const recipeRows = recipeRowsByProductId.get(Number(productId)) || [];
+    if (recipeRows.length === 0) return null;
+
+    let lowestServings = Number.POSITIVE_INFINITY;
+    let limitingItemName = "";
+
+    recipeRows.forEach((recipe) => {
+      const item = inventoryItemById.get(Number(recipe.inventory_item_id));
+      const required = Number(recipe.quantity_required || 0) * (1 + Number(recipe.wastage_percent || 0) / 100);
+      if (!item || required <= 0) return;
+      const servings = Math.floor(Number(item.current_stock || 0) / required);
+      if (servings < lowestServings) {
+        lowestServings = servings;
+        limitingItemName = item.item_name;
+      }
+    });
+
+    if (!Number.isFinite(lowestServings)) return null;
+    if (lowestServings <= 0) return { level: "out" as const, label: "Cannot make", detail: limitingItemName ? `Missing ${limitingItemName}` : "Recipe stock is empty" };
+    if (lowestServings <= 5) return { level: "critical" as const, label: `${lowestServings} left`, detail: limitingItemName ? `Limited by ${limitingItemName}` : "Very low stock" };
+    if (lowestServings <= 12) return { level: "low" as const, label: `${lowestServings} left`, detail: limitingItemName ? `Watch ${limitingItemName}` : "Low stock" };
+    return null;
+  }
 
 
   function exportCustomerContactsCsv(rows: CustomerSummary[], mode: "all" | "filtered") {
@@ -4345,6 +4411,134 @@ const canEditSetup = currentRole === "admin";
   }
 
 
+  function updateSimpleStockIntakeForm(patch: Partial<SimpleStockIntakeForm>) {
+    setSimpleStockIntakeForm((prev) => ({ ...prev, ...patch }));
+  }
+
+  function clearSimpleStockIntakeForm() {
+    setSimpleStockIntakeForm({
+      inventory_item_id: "",
+      vendor_id: "",
+      quantity: "",
+      unit_cost: "",
+      delivery_date: new Date().toISOString().slice(0, 10),
+      invoice_number: "",
+      amount_paid_today: "",
+      notes: "",
+    });
+  }
+
+  async function saveSimpleStockIntake() {
+    try {
+      if (!canUseInventoryIntake) {
+        setStatusMessage("You do not have permission to save stock intake");
+        return;
+      }
+
+      const item = inventoryItems.find((inventoryItem) => String(inventoryItem.id) === simpleStockIntakeForm.inventory_item_id);
+      if (!item) throw new Error("Select an inventory item");
+
+      const displayQuantity = Number(simpleStockIntakeForm.quantity || 0);
+      const unitCostDisplay = Number(simpleStockIntakeForm.unit_cost || 0);
+      if (displayQuantity <= 0) throw new Error("Enter quantity received");
+      if (unitCostDisplay < 0) throw new Error("Enter a valid unit cost");
+
+      const rawQuantity = convertInventoryDisplayToRaw(displayQuantity, item);
+      const rawUnitCost = getInventoryDisplayScale(item) > 0 ? unitCostDisplay / getInventoryDisplayScale(item) : unitCostDisplay;
+      const lineTotal = displayQuantity * unitCostDisplay;
+      const amountPaidToday = Math.max(0, Number(simpleStockIntakeForm.amount_paid_today || 0));
+
+      let vendorId = simpleStockIntakeForm.vendor_id ? Number(simpleStockIntakeForm.vendor_id) : null;
+      if (!vendorId) {
+        const fallbackVendorName = "Unspecified Vendor";
+        const { data: existingVendor } = await supabase.from("vendors").select("id").eq("vendor_name", fallbackVendorName).maybeSingle();
+        if (existingVendor?.id) {
+          vendorId = Number(existingVendor.id);
+        } else {
+          const { data: createdVendor, error: vendorError } = await supabase.from("vendors").insert({ vendor_name: fallbackVendorName, active: true }).select("id").single();
+          if (vendorError) throw new Error(`Could not create fallback vendor: ${vendorError.message}`);
+          vendorId = Number(createdVendor.id);
+        }
+      }
+
+      const { data: shipment, error: shipmentError } = await supabase.from("vendor_shipments").insert({
+        vendor_id: vendorId,
+        invoice_number: simpleStockIntakeForm.invoice_number || null,
+        delivery_date: simpleStockIntakeForm.delivery_date || new Date().toISOString().slice(0, 10),
+        total_amount: lineTotal,
+        paid_amount: amountPaidToday,
+        outstanding_amount: Math.max(lineTotal - amountPaidToday, 0),
+        payment_status: lineTotal <= 0 ? "paid" : amountPaidToday <= 0 ? "unpaid" : amountPaidToday < lineTotal ? "partially_paid" : "paid",
+        fully_paid_at: lineTotal > 0 && amountPaidToday >= lineTotal ? new Date().toISOString() : null,
+        notes: simpleStockIntakeForm.notes || "Simple stock intake",
+      }).select("id").single();
+      if (shipmentError) throw new Error(`Could not create stock intake: ${shipmentError.message}`);
+
+      const { error: lineError } = await supabase.from("vendor_shipment_lines").insert({
+        shipment_id: shipment.id,
+        inventory_item_id: item.id,
+        quantity: rawQuantity,
+        unit_cost: rawUnitCost,
+        line_total: lineTotal,
+        supply_model: amountPaidToday >= lineTotal ? "outright_purchase" : "credit_payable",
+        revenue_share_percent: null,
+        expiry_date: null,
+      });
+      if (lineError) throw new Error(`Could not create intake line: ${lineError.message}`);
+
+      const nextStock = Number(item.current_stock || 0) + Number(rawQuantity || 0);
+      const { error: stockError } = await supabase.from("inventory_items").update({ current_stock: nextStock, default_vendor_id: vendorId }).eq("id", item.id);
+      if (stockError) throw new Error(`Could not update stock: ${stockError.message}`);
+
+      const { error: movementError } = await supabase.from("inventory_movements").insert({
+        inventory_item_id: item.id,
+        order_id: null,
+        product_id: null,
+        product_name: null,
+        movement_type: "purchase_addition",
+        quantity_change: rawQuantity,
+        unit: item.unit,
+        batch_id: null,
+        unit_cost: rawUnitCost,
+        line_cost: lineTotal,
+        note: `Simple stock intake ${shipment.id}`,
+      });
+      if (movementError) throw new Error(`Could not create stock movement: ${movementError.message}`);
+
+      if (amountPaidToday > 0 && vendorId) {
+        const { error: paymentError } = await supabase.from("vendor_payments").insert({
+          vendor_id: vendorId,
+          shipment_id: shipment.id,
+          payment_date: simpleStockIntakeForm.delivery_date || new Date().toISOString().slice(0, 10),
+          amount: amountPaidToday,
+          payment_method: "cash",
+          notes: "Paid at simple stock intake",
+          created_by: staffProfile?.id || null,
+        });
+        if (paymentError) throw new Error(`Could not record payment: ${paymentError.message}`);
+      }
+
+      await recordAuditLog("simple_stock_intake_saved", "vendor_shipment", shipment.id, {
+        inventory_item_id: item.id,
+        item_name: item.item_name,
+        display_quantity: displayQuantity,
+        display_unit: getInventoryDisplayUnit(item),
+        line_total: lineTotal,
+      });
+
+      clearSimpleStockIntakeForm();
+      setStatusMessage("Simple stock intake saved");
+      await loadVendorShipments();
+      await loadVendorShipmentLines();
+      await loadInventoryItems();
+      await loadInventoryMovements();
+      await loadVendorPayments();
+      await loadVendors();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not save simple stock intake");
+    }
+  }
+
   async function saveStockIntake() {
     try {
       const validRows = stockIntakeRows.filter((row) => {
@@ -4582,6 +4776,7 @@ const canEditSetup = currentRole === "admin";
         if (paymentError) throw new Error(`Could not record payment: ${paymentError.message}`);
       }
 
+      await recordAuditLog("stock_intake_saved", "vendor_shipment", shipment.id, { row_count: validRows.length, total_amount: shipmentTotal });
       setStatusMessage("Stock intake saved");
       clearStockIntakeForm();
       if (typeof loadVendorShipments === "function") await loadVendorShipments();
@@ -4875,6 +5070,39 @@ const canEditSetup = currentRole === "admin";
     });
 
     setStatusMessage("Printer settings saved");
+  }
+
+  async function recordAuditLog(action: string, entityType: string, entityId?: string | number | null, details: Record<string, unknown> = {}) {
+    try {
+      await supabase.from("audit_logs").insert({
+        action,
+        entity_type: entityType,
+        entity_id: entityId == null ? null : String(entityId),
+        actor_id: staffProfile?.id || null,
+        actor_name: (staffProfile as any)?.full_name || null,
+        actor_role: currentRole,
+        details,
+        created_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.warn("Audit log skipped", error);
+    }
+  }
+
+  async function testKitchenPrinter() {
+    const electronPOS = (window as any).electronPOS;
+    if (!electronPOS || !receiptKitchenPrinter) {
+      setStatusMessage("Select receipt/kitchen printer first");
+      return;
+    }
+
+    const result = await electronPOS.printKitchen({
+      printerName: receiptKitchenPrinter,
+      html: "<html><body style='font-family:Arial,sans-serif;padding:12px'><h2>STT Kitchen Test</h2><p>Order: STT-TEST</p><p>Iced Latte x 1</p><p>Less Sugar | No Ice</p></body></html>",
+      printOptions: { margins: { marginType: "none" }, pageSize: { width: 76200, height: 2000000 } },
+    });
+
+    setStatusMessage(result?.ok ? "Kitchen test sent" : `Kitchen print failed: ${result?.error || "Unknown error"}`);
   }
 
   async function testReceiptPrinter() {
@@ -5352,6 +5580,7 @@ async function printOrderArtifacts(params: {
       categoryIds: [],
       modifierIds: [],
     });
+    await recordAuditLog(productForm.id ? "product_updated" : "product_created", "product", productId, { name: payload.name, price: payload.price, active: payload.active });
     setStatusMessage(productForm.id ? "Product updated" : "Product created");
     await refreshAll();
   }
@@ -5475,6 +5704,10 @@ async function printOrderArtifacts(params: {
       setStatusMessage("Select a payment method");
       return;
     }
+    if (!canApplyDiscount && appliedBillDiscount > 0) {
+      setStatusMessage("Only managers or admins can apply bill discounts");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -5548,6 +5781,25 @@ async function printOrderArtifacts(params: {
 
       const { error: itemsError } = await supabase.from("order_items").insert(orderItemsPayload);
       if (itemsError) throw new Error(itemsError.message);
+
+      await recordAuditLog("order_created", "order", orderId, {
+        order_number: orderNumber,
+        total: cartGrandTotal,
+        subtotal: cartSubtotal,
+        tax_total: cartTaxTotal,
+        discount_total: redeemablePoints + appliedBillDiscount,
+        item_count: cart.length,
+        payment_method_id: selectedPaymentMethodId,
+      });
+
+      if (appliedBillDiscount > 0) {
+        await recordAuditLog("discount_applied", "order", orderId, {
+          order_number: orderNumber,
+          bill_discount_mode: billDiscountMode,
+          bill_discount_percent: billDiscountPercentInput,
+          bill_discount_amount: appliedBillDiscount,
+        });
+      }
 
       if (customer) {
         const customerUpdates: Record<string, number> = {
@@ -5670,6 +5922,7 @@ async function printOrderArtifacts(params: {
         : prev
     );
 
+    await recordAuditLog("order_marked_ready", "order", orderId, { order_number: order?.order_number || null });
     await refreshAll();
     if (selectedCustomerId) await loadCustomerDetailById(selectedCustomerId);
   }
@@ -5745,6 +5998,7 @@ async function printOrderArtifacts(params: {
         prev && Number(prev.id) === Number(orderId) ? null : prev
       );
 
+      await recordAuditLog("order_completed", "order", orderId, { order_number: order?.order_number || null, cogs_message: cogsMessage || null });
       setStatusMessage(`Order marked completed${cogsMessage}`);
       await refreshAll();
       if (selectedCustomerId) await loadCustomerDetailById(selectedCustomerId);
@@ -6294,21 +6548,35 @@ async function printOrderArtifacts(params: {
                             <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                               {section.products.map((product) => {
                                 const selected = selectedProductForCart?.id === product.id;
+                                const stockWarning = getProductStockWarning(product.id);
+                                const isOutOfStockByRecipe = stockWarning?.level === "out";
 
                                 return (
                                   <button
                                     key={product.id}
                                     type="button"
+                                    disabled={isOutOfStockByRecipe}
+                                    title={stockWarning?.detail || product.name}
                                     onClick={() => {
+                                      if (isOutOfStockByRecipe) {
+                                        setStatusMessage(`${product.name} cannot be made because recipe stock is unavailable`);
+                                        return;
+                                      }
                                       setSelectedProductForCart(product);
                                       setSelectedModifierIds([]);
                                       setLineNotes("");
                                       setLinePricingMode("normal");
                                       setLineDiscountedUnitPrice("");
                                     }}
-                                    className={`min-h-[92px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
+                                    className={`min-h-[104px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] disabled:cursor-not-allowed disabled:opacity-60 ${
                                       selected
                                         ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+                                        : isOutOfStockByRecipe
+                                        ? "border-slate-200 bg-slate-100 text-slate-500"
+                                        : stockWarning?.level === "critical"
+                                        ? "border-red-200 bg-red-50 text-red-950 hover:border-red-300"
+                                        : stockWarning?.level === "low"
+                                        ? "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-300"
                                         : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
                                     }`}
                                   >
@@ -6324,11 +6592,24 @@ async function printOrderArtifacts(params: {
                                     </div>
                                     <div
                                       className={`mt-1 text-[10px] leading-3 ${
-                                        selected ? "text-rose-100/80" : "text-rose-500/80"
+                                        selected ? "text-rose-100/80" : stockWarning ? "text-slate-600" : "text-rose-500/80"
                                       }`}
                                     >
                                       {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
                                     </div>
+                                    {stockWarning ? (
+                                      <div className={`mt-2 rounded-lg px-2 py-1 text-[10px] font-semibold ${
+                                        selected
+                                          ? "bg-white/20 text-white"
+                                          : stockWarning.level === "out"
+                                          ? "bg-slate-200 text-slate-700"
+                                          : stockWarning.level === "critical"
+                                          ? "bg-red-100 text-red-700"
+                                          : "bg-amber-100 text-amber-700"
+                                      }`}>
+                                        {stockWarning.label}
+                                      </div>
+                                    ) : null}
                                   </button>
                                 );
                               })}
@@ -6531,6 +6812,7 @@ async function printOrderArtifacts(params: {
                       />
                     </div>
 
+                    {canApplyDiscount ? (
                     <div className="rounded-2xl border border-rose-200 bg-white p-3">
                       <div className="mb-2 text-xs font-medium text-rose-700">Bill Discount</div>
                       <div className="mb-3 grid grid-cols-4 gap-2">
@@ -6603,6 +6885,11 @@ async function printOrderArtifacts(params: {
                         <span className="font-semibold">- {formatCurrency(appliedBillDiscount)}</span>
                       </div>
                     </div>
+                    ) : (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                        Discounts are manager/admin only.
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-xs">
                       <span>Discount</span>
@@ -8549,8 +8836,33 @@ async function printOrderArtifacts(params: {
           <div className="space-y-6">
             <section className="grid gap-6 xl:grid-cols-2">
               
+            <section className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-5 shadow-sm xl:col-span-2">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-semibold text-slate-950">Simple Daily Stock Intake</h2>
+                  <p className="mt-1 text-xs text-emerald-700/80">Use this for quick daily receiving. Choose an existing inventory item, enter quantity in the display unit, and save.</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Manager/Admin</span>
+              </div>
+              {!canUseInventoryIntake ? (
+                <div className="rounded-2xl border border-dashed border-emerald-200 bg-white p-4 text-sm text-emerald-700">Stock intake is restricted to managers and admins.</div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="xl:col-span-2"><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Inventory Item</label><select value={simpleStockIntakeForm.inventory_item_id} onChange={(e) => updateSimpleStockIntakeForm({ inventory_item_id: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"><option value="">Select item</option>{inventoryItems.filter((item) => item.active !== false).map((item) => (<option key={item.id} value={String(item.id)}>{item.item_name} - {getInventoryStockSummaryText(item)}</option>))}</select></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Vendor Optional</label><select value={simpleStockIntakeForm.vendor_id} onChange={(e) => updateSimpleStockIntakeForm({ vendor_id: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm"><option value="">Unspecified Vendor</option>{vendors.filter((vendor) => vendor.active !== false).map((vendor) => (<option key={vendor.id} value={String(vendor.id)}>{vendor.vendor_name}</option>))}</select></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Delivery Date</label><input type="date" value={simpleStockIntakeForm.delivery_date} onChange={(e) => updateSimpleStockIntakeForm({ delivery_date: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" /></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Quantity</label><input value={simpleStockIntakeForm.quantity} onChange={(e) => updateSimpleStockIntakeForm({ quantity: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" placeholder="Example: 2" /></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Unit Cost</label><input value={simpleStockIntakeForm.unit_cost} onChange={(e) => updateSimpleStockIntakeForm({ unit_cost: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" placeholder="Cost per display unit" /></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Amount Paid Today</label><input value={simpleStockIntakeForm.amount_paid_today} onChange={(e) => updateSimpleStockIntakeForm({ amount_paid_today: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" placeholder="Optional" /></div>
+                  <div><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Invoice</label><input value={simpleStockIntakeForm.invoice_number} onChange={(e) => updateSimpleStockIntakeForm({ invoice_number: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" placeholder="Optional" /></div>
+                  <div className="md:col-span-2 xl:col-span-4"><label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-700">Notes</label><input value={simpleStockIntakeForm.notes} onChange={(e) => updateSimpleStockIntakeForm({ notes: e.target.value })} className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm" placeholder="Optional notes" /></div>
+                  <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2"><button type="button" onClick={saveSimpleStockIntake} className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm">Save Simple Intake</button><button type="button" onClick={clearSimpleStockIntakeForm} className="rounded-xl border border-emerald-200 bg-white px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">Clear</button><div className="rounded-xl bg-white px-3 py-2 text-xs text-emerald-700">Total: {formatCurrency(Number(simpleStockIntakeForm.quantity || 0) * Number(simpleStockIntakeForm.unit_cost || 0))}</div></div>
+                </div>
+              )}
+            </section>
+
             <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm xl:col-span-2">
-              <h2 className="mb-2 text-2xl font-semibold">Stock Intake</h2>
+              <h2 className="mb-2 text-2xl font-semibold">Advanced Stock Intake</h2>
               <p className="mb-4 text-xs text-rose-700/70">
                 Search items by any part of the name. Vendor is optional. If no result appears, create the item inline in the same row.
               </p>
@@ -10273,7 +10585,14 @@ async function printOrderArtifacts(params: {
                       onClick={testReceiptPrinter}
                       className="rounded-xl border border-rose-200 px-4 py-2 text-sm font-medium"
                     >
-                      Test Receipt/Kitchen Printer
+                      Test Receipt Printer
+                    </button>
+
+                    <button
+                      onClick={testKitchenPrinter}
+                      className="rounded-xl border border-rose-200 px-4 py-2 text-sm font-medium"
+                    >
+                      Test Kitchen Ticket
                     </button>
 
                     <button
