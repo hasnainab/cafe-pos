@@ -6548,35 +6548,22 @@ async function printOrderArtifacts(params: {
                             <div className="grid grid-cols-3 gap-2 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                               {section.products.map((product) => {
                                 const selected = selectedProductForCart?.id === product.id;
-                                const stockWarning = getProductStockWarning(product.id);
-                                const isOutOfStockByRecipe = stockWarning?.level === "out";
 
                                 return (
                                   <button
                                     key={product.id}
                                     type="button"
-                                    disabled={isOutOfStockByRecipe}
-                                    title={stockWarning?.detail || product.name}
+                                    title={product.name}
                                     onClick={() => {
-                                      if (isOutOfStockByRecipe) {
-                                        setStatusMessage(`${product.name} cannot be made because recipe stock is unavailable`);
-                                        return;
-                                      }
                                       setSelectedProductForCart(product);
                                       setSelectedModifierIds([]);
                                       setLineNotes("");
                                       setLinePricingMode("normal");
                                       setLineDiscountedUnitPrice("");
                                     }}
-                                    className={`min-h-[104px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] disabled:cursor-not-allowed disabled:opacity-60 ${
+                                    className={`min-h-[104px] rounded-xl border p-3 text-left transition shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:-translate-y-[1px] hover:shadow-[0_8px_18px_rgba(0,0,0,0.10)] ${
                                       selected
                                         ? "border-slate-900 bg-rose-500 text-white shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-                                        : isOutOfStockByRecipe
-                                        ? "border-slate-200 bg-slate-100 text-slate-500"
-                                        : stockWarning?.level === "critical"
-                                        ? "border-red-200 bg-red-50 text-red-950 hover:border-red-300"
-                                        : stockWarning?.level === "low"
-                                        ? "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-300"
                                         : "border-rose-200 bg-white text-rose-950 hover:border-rose-300"
                                     }`}
                                   >
@@ -6592,24 +6579,11 @@ async function printOrderArtifacts(params: {
                                     </div>
                                     <div
                                       className={`mt-1 text-[10px] leading-3 ${
-                                        selected ? "text-rose-100/80" : stockWarning ? "text-slate-600" : "text-rose-500/80"
+                                        selected ? "text-rose-100/80" : "text-rose-500/80"
                                       }`}
                                     >
                                       {product.categories.map((cat) => cat.name).join(", ") || "Uncategorized"}
                                     </div>
-                                    {stockWarning ? (
-                                      <div className={`mt-2 rounded-lg px-2 py-1 text-[10px] font-semibold ${
-                                        selected
-                                          ? "bg-white/20 text-white"
-                                          : stockWarning.level === "out"
-                                          ? "bg-slate-200 text-slate-700"
-                                          : stockWarning.level === "critical"
-                                          ? "bg-red-100 text-red-700"
-                                          : "bg-amber-100 text-amber-700"
-                                      }`}>
-                                        {stockWarning.label}
-                                      </div>
-                                    ) : null}
                                   </button>
                                 );
                               })}
