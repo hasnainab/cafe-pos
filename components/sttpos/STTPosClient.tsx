@@ -5162,7 +5162,7 @@ function openAdminVoidsWithPin() {
       return;
     }
 
-    const stickerHtml = buildStickerHtml([
+    const stickerHtml = buildSimpleStickerHtml([
       {
         orderNumber: "STT-30-0001",
         customerName: "ALI",
@@ -5176,6 +5176,10 @@ function openAdminVoidsWithPin() {
     const result = await electronPOS.printStickers({
       printerName: stickerPrinter,
       html: stickerHtml,
+      printOptions: {
+        margins: { marginType: "none" },
+        pageSize: { width: 50800, height: 25400 },
+      },
     });
 
     setStatusMessage(result?.ok ? "Sticker test sent" : `Sticker print failed: ${result?.error || "Unknown error"}`);
@@ -5237,6 +5241,173 @@ function openAdminVoidsWithPin() {
     return rows;
   }
 
+  function escapeStickerHtml(value: string | number | null | undefined) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function buildSimpleStickerHtml(stickerRows: Array<{
+    orderNumber: string;
+    customerName: string;
+    drinkName: string;
+    modifiers: string;
+    notes: string;
+    countLabel: string;
+  }>) {
+    const pages = stickerRows
+      .map((row) => {
+        const customer = escapeStickerHtml(row.customerName || "Guest");
+        const orderNumber = escapeStickerHtml(row.orderNumber || "");
+        const itemName = escapeStickerHtml(row.drinkName || "");
+        const countLabel = escapeStickerHtml(row.countLabel || "");
+        const modifiers = escapeStickerHtml(row.modifiers || "");
+        const notes = escapeStickerHtml(row.notes || "");
+
+        return `
+          <section class="label">
+            <div class="label-top">
+              <div class="customer">${customer}</div>
+              <div class="count">${countLabel}</div>
+            </div>
+            <div class="item">${itemName}</div>
+            ${modifiers ? `<div class="details">${modifiers}</div>` : ""}
+            ${notes ? `<div class="notes">${notes}</div>` : ""}
+            <div class="order">${orderNumber}</div>
+          </section>
+        `;
+      })
+      .join("");
+
+    return `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            @page {
+              size: 2in 1in;
+              margin: 0;
+            }
+
+            * {
+              box-sizing: border-box;
+            }
+
+            html,
+            body {
+              width: 2in;
+              margin: 0;
+              padding: 0;
+              background: #ffffff;
+              color: #000000;
+              font-family: Arial, Helvetica, sans-serif;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+
+            body {
+              font-size: 12px;
+            }
+
+            .label {
+              width: 2in;
+              height: 1in;
+              overflow: hidden;
+              page-break-after: always;
+              break-after: page;
+              padding: 0.055in 0.065in;
+              display: flex;
+              flex-direction: column;
+              justify-content: flex-start;
+              background: #ffffff;
+              color: #000000;
+            }
+
+            .label:last-child {
+              page-break-after: auto;
+              break-after: auto;
+            }
+
+            .label-top {
+              display: flex;
+              justify-content: space-between;
+              gap: 0.04in;
+              align-items: flex-start;
+              width: 100%;
+            }
+
+            .customer {
+              max-width: 1.35in;
+              font-size: 12px;
+              line-height: 1;
+              font-weight: 900;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              color: #000000;
+            }
+
+            .count {
+              font-size: 10px;
+              line-height: 1;
+              font-weight: 900;
+              white-space: nowrap;
+              color: #000000;
+            }
+
+            .item {
+              margin-top: 0.055in;
+              font-size: 15px;
+              line-height: 1.02;
+              font-weight: 900;
+              text-transform: uppercase;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              color: #000000;
+            }
+
+            .details {
+              margin-top: 0.035in;
+              font-size: 8px;
+              line-height: 1;
+              font-weight: 800;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              color: #000000;
+            }
+
+            .notes {
+              margin-top: 0.025in;
+              font-size: 8px;
+              line-height: 1;
+              font-weight: 700;
+              font-style: italic;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              color: #000000;
+            }
+
+            .order {
+              margin-top: auto;
+              font-size: 9px;
+              line-height: 1;
+              font-weight: 900;
+              color: #000000;
+            }
+          </style>
+        </head>
+        <body>${pages}</body>
+      </html>
+    `;
+  }
+
   async function printOrderArtifacts(params: {
     orderNumber: string;
     createdAt: string;
@@ -5247,8 +5418,10 @@ function openAdminVoidsWithPin() {
     const electronPOS = (window as any).electronPOS;
     if (!electronPOS) {
       return {
+        receiptStatus: "Printer bridge not available",
+        kitchenStatus: "Printer bridge not available",
         stickerCount: 0,
-        stickerStatus: "Electron printer bridge not available",
+        stickerStatus: "Printer bridge not available",
       };
     }
 
@@ -5257,15 +5430,31 @@ function openAdminVoidsWithPin() {
     const cafeAddress = "";
     const cartForPrint = params.cartSnapshot && params.cartSnapshot.length > 0 ? params.cartSnapshot : cart;
 
+    const subtotalForPrint = cartForPrint.reduce((sum, item) => {
+      const modifierTotal = item.modifiers.reduce(
+        (modSum, mod) => modSum + Number(mod.price_delta || 0),
+        0
+      );
+      const normalUnit = Number(item.base_price || 0) + modifierTotal;
+
+      let unit = normalUnit;
+      if (item.pricing_mode === "complimentary") unit = 0;
+      if (item.pricing_mode === "discounted") {
+        unit = Math.max(0, Number(item.discounted_unit_price || 0));
+      }
+
+      return sum + unit * Number(item.quantity || 0);
+    }, 0);
+
     const orderForPrint = {
       order_number: params.orderNumber,
       created_at: params.createdAt,
       customer_name: params.customerNameForPrint,
       payment_method_name: params.paymentMethodName,
-      subtotal: cartSubtotal,
+      subtotal: cartSubtotal || subtotalForPrint,
       discount_total: redeemablePoints + appliedBillDiscount,
       tax_total: cartTaxTotal,
-      total: cartGrandTotal,
+      total: cartGrandTotal || subtotalForPrint,
       logo_data_url: logoDataUrl || null,
       business_name: "Spill The Tea",
       business_tagline: "Cafe • Coffee • Tea • Mocktails",
@@ -5296,78 +5485,118 @@ function openAdminVoidsWithPin() {
       }),
     };
 
-    if (autoPrintReceipt && receiptKitchenPrinter) {
-      await electronPOS.printReceipt({
-        printerName: receiptKitchenPrinter,
-        html: buildReceiptHtml(orderForPrint),
-        printOptions: {
-          margins: { marginType: "none" },
-          pageSize: { width: 76200, height: 2000000 },
-        },
-      });
-    }
+    let receiptStatus = "Receipt auto print is off";
+    let kitchenStatus = "Kitchen auto print is off";
+    let stickerStatus = "Sticker auto print is off";
+    let stickerCount = 0;
 
-    if (autoPrintKitchen && receiptKitchenPrinter) {
-      await electronPOS.printKitchen({
-        printerName: receiptKitchenPrinter,
-        html: buildKitchenHtml(orderForPrint),
-        printOptions: {
-          margins: { marginType: "none" },
-          pageSize: { width: 76200, height: 2000000 },
-        },
-      });
-    }
+    if (autoPrintReceipt) {
+      if (!receiptKitchenPrinter) {
+        receiptStatus = "Receipt printer not selected";
+      } else {
+        try {
+          const receiptResult = await electronPOS.printReceipt({
+            printerName: receiptKitchenPrinter,
+            html: buildReceiptHtml(orderForPrint),
+            printOptions: {
+              margins: { marginType: "none" },
+              pageSize: { width: 76200, height: 2000000 },
+            },
+          });
 
-    if (!autoPrintStickers) {
-      return {
-        stickerCount: 0,
-        stickerStatus: "Sticker auto print is off",
-      };
-    }
-
-    if (!stickerPrinter) {
-      return {
-        stickerCount: 0,
-        stickerStatus: "Sticker printer not selected",
-      };
-    }
-
-    const stickerRows = buildStickerRowsFromCartSnapshot({
-      cartSnapshot: cartForPrint,
-      orderNumber: params.orderNumber,
-      customerNameForPrint: params.customerNameForPrint,
-    });
-
-    if (stickerRows.length === 0) {
-      return {
-        stickerCount: 0,
-        stickerStatus: "No item stickers needed",
-      };
-    }
-
-    try {
-      const result = await electronPOS.printStickers({
-        printerName: stickerPrinter,
-        html: buildStickerHtml(stickerRows),
-      });
-
-      if (!result?.ok) {
-        return {
-          stickerCount: 0,
-          stickerStatus: `Sticker print failed: ${result?.error || "Unknown error"}`,
-        };
+          receiptStatus = receiptResult?.ok === false
+            ? `Receipt failed: ${receiptResult?.error || "Unknown error"}`
+            : "Receipt sent";
+        } catch (error) {
+          receiptStatus = error instanceof Error ? `Receipt failed: ${error.message}` : "Receipt failed";
+        }
       }
-
-      return {
-        stickerCount: stickerRows.length,
-        stickerStatus: `${stickerRows.length} sticker(s) sent`,
-      };
-    } catch (error) {
-      return {
-        stickerCount: 0,
-        stickerStatus: error instanceof Error ? `Sticker print failed: ${error.message}` : "Sticker print failed",
-      };
     }
+
+    if (autoPrintKitchen) {
+      if (!receiptKitchenPrinter) {
+        kitchenStatus = "Kitchen printer not selected";
+      } else {
+        try {
+          const kitchenHeaderHtml = `
+            <div style="text-align:center;font-family:Arial,sans-serif;margin:0 0 8px 0;padding:0 0 8px 0;border-bottom:1px dashed #000;">
+              <div style="font-size:18px;font-weight:800;">${params.orderNumber}</div>
+              <div style="font-size:14px;font-weight:700;">Customer: ${params.customerNameForPrint || "Guest"}</div>
+            </div>
+          `;
+
+          const kitchenResult = await electronPOS.printKitchen({
+            printerName: receiptKitchenPrinter,
+            html: buildKitchenHtml({
+              ...orderForPrint,
+              customer_name: params.customerNameForPrint || "Guest",
+              order_number: params.orderNumber,
+            }).replace("<body>", `<body>${kitchenHeaderHtml}`),
+            printOptions: {
+              margins: { marginType: "none" },
+              pageSize: { width: 76200, height: 2000000 },
+            },
+          });
+
+          kitchenStatus = kitchenResult?.ok === false
+            ? `Kitchen failed: ${kitchenResult?.error || "Unknown error"}`
+            : "Kitchen sent";
+        } catch (error) {
+          kitchenStatus = error instanceof Error ? `Kitchen failed: ${error.message}` : "Kitchen failed";
+        }
+      }
+    }
+
+    if (autoPrintStickers) {
+      if (!stickerPrinter) {
+        stickerStatus = "Sticker printer not selected";
+      } else {
+        const stickerRows = buildStickerRowsFromCartSnapshot({
+          cartSnapshot: cartForPrint,
+          orderNumber: params.orderNumber,
+          customerNameForPrint: params.customerNameForPrint,
+        });
+
+        if (stickerRows.length === 0) {
+          stickerStatus = "No item stickers needed";
+        } else {
+          try {
+            const stickerHtml = buildSimpleStickerHtml(
+              stickerRows.map((row) => ({
+                ...row,
+                orderNumber: params.orderNumber,
+                customerName: params.customerNameForPrint || "Guest",
+              }))
+            );
+
+            const stickerResult = await electronPOS.printStickers({
+              printerName: stickerPrinter,
+              html: stickerHtml,
+              printOptions: {
+                margins: { marginType: "none" },
+                pageSize: { width: 50800, height: 25400 },
+              },
+            });
+
+            if (stickerResult?.ok === false) {
+              stickerStatus = `Sticker failed: ${stickerResult?.error || "Unknown error"}`;
+            } else {
+              stickerCount = stickerRows.length;
+              stickerStatus = `${stickerRows.length} sticker(s) sent`;
+            }
+          } catch (error) {
+            stickerStatus = error instanceof Error ? `Sticker failed: ${error.message}` : "Sticker failed";
+          }
+        }
+      }
+    }
+
+    return {
+      receiptStatus,
+      kitchenStatus,
+      stickerCount,
+      stickerStatus,
+    };
   }
 
   async function saveCustomerBonus(customerId: number, bonusValue: string) {
@@ -5976,7 +6205,7 @@ function openAdminVoidsWithPin() {
       setRedeemPointsInput("0");
       setCashReceivedInput("");
       resetLineBuilder();
-      setStatusMessage(`Order ${orderNumber} created | ${printResult.stickerStatus}`);
+      setStatusMessage(`Order ${orderNumber} created | ${printResult.receiptStatus} | ${printResult.kitchenStatus} | ${printResult.stickerStatus}`);
       await refreshAll();
 
       if (customer) {
