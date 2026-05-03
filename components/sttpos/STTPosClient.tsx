@@ -5182,102 +5182,193 @@ function openAdminVoidsWithPin() {
   }
 
   function isDrinkProduct(productId: number, productName: string) {
-    const product = products.find((p) => p.id === productId) || null;
-    const categoryText = (product?.categories || []).map((c) => String(c.name).toLowerCase()).join(" ");
-    if (/(drink|drinks|beverage|beverages|coffee|tea)/.test(categoryText)) return true;
-
+    const product = products.find((p) => Number(p.id) === Number(productId)) || null;
+    const categoryText = (product?.categories || [])
+      .map((c) => String(c.name || "").toLowerCase())
+      .join(" ");
     const name = String(productName || "").toLowerCase();
-    return /(americano|espresso|latte|cappuccino|mocha|coffee|tea|frappe|shake|smoothie|macchiato)/.test(name);
+    const combined = `${categoryText} ${name}`;
+
+    const nonDrinkWords =
+      /(cigarette|cigarettes|marlboro|dunhill|gold leaf|capstan|tobacco|lighter|cake|brownie|cookie|sandwich|wrap|burger|fries|chips|nachos|waffle|dessert|pastry)/;
+
+    if (nonDrinkWords.test(combined)) return false;
+
+    const drinkWords =
+      /(drink|drinks|beverage|beverages|coffee|tea|chai|latte|cappuccino|americano|espresso|mocha|macchiato|frappe|shake|smoothie|cooler|lemonade|mojito|mocktail|cocktail|juice|iced|hot chocolate|chocolate|strawberry|caramel|pistachio|hazelnut|spanish)/;
+
+    return drinkWords.test(combined);
   }
 
-async function printOrderArtifacts(params: {
-  orderNumber: string;
-  createdAt: string;
-  customerNameForPrint: string;
-  paymentMethodName: string;
-}) {
-  const electronPOS = (window as any).electronPOS;
-  if (!electronPOS) return;
+  function buildStickerRowsFromCartSnapshot({
+    cartSnapshot,
+    orderNumber,
+    customerNameForPrint,
+  }: {
+    cartSnapshot: CartItem[];
+    orderNumber: string;
+    customerNameForPrint: string;
+  }) {
+    const rows: Array<{
+      orderNumber: string;
+      customerName: string;
+      drinkName: string;
+      modifiers: string;
+      notes: string;
+      countLabel: string;
+    }> = [];
 
-  const logoDataUrl = "";
-  const cafePhone = "";
-  const cafeAddress = "";
+    cartSnapshot.forEach((item) => {
+      const quantity = Math.max(1, Number(item.quantity || 1));
+      const modifiers = item.modifiers.map((modifier) => modifier.name).join(" | ");
 
-  const orderForPrint = {
-    order_number: params.orderNumber,
-    created_at: params.createdAt,
-    customer_name: params.customerNameForPrint,
-    payment_method_name: params.paymentMethodName,
-    subtotal: cartSubtotal,
-    discount_total: redeemablePoints + appliedBillDiscount,
-    tax_total: cartTaxTotal,
-    total: cartGrandTotal,
-    logo_data_url: logoDataUrl || null,
-    business_name: "Spill The Tea",
-    business_tagline: "Cafe • Coffee • Tea • Mocktails",
-    business_phone: cafePhone || null,
-    business_address: cafeAddress || null,
-    items: cart.map((item) => {
-      const modifierTotal = item.modifiers.reduce(
-        (sum, mod) => sum + Number(mod.price_delta || 0),
-        0
-      );
-      const normalUnit = Number(item.base_price || 0) + modifierTotal;
-
-      let unitPrice = normalUnit;
-      if (item.pricing_mode === "complimentary") unitPrice = 0;
-      if (item.pricing_mode === "discounted") {
-        unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
+      for (let index = 1; index <= quantity; index += 1) {
+        rows.push({
+          orderNumber,
+          customerName: customerNameForPrint || "Guest",
+          drinkName: item.name,
+          modifiers,
+          notes: item.notes || "",
+          countLabel: `${index}/${quantity}`,
+        });
       }
+    });
 
+    return rows;
+  }
+
+  async function printOrderArtifacts(params: {
+    orderNumber: string;
+    createdAt: string;
+    customerNameForPrint: string;
+    paymentMethodName: string;
+    cartSnapshot?: CartItem[];
+  }) {
+    const electronPOS = (window as any).electronPOS;
+    if (!electronPOS) {
       return {
-        product_name: item.name,
-        quantity: item.quantity,
-        unit_price: unitPrice,
-        line_total: unitPrice * Number(item.quantity || 0),
-        modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
-        notes: item.notes || null,
-        product_type: isDrinkProduct(item.product_id, item.name) ? "drink" : "food",
+        stickerCount: 0,
+        stickerStatus: "Electron printer bridge not available",
       };
-    }),
-  };
+    }
 
-  if (autoPrintReceipt && receiptKitchenPrinter) {
-    await electronPOS.printReceipt({
-      printerName: receiptKitchenPrinter,
-      html: buildReceiptHtml(orderForPrint),
-      printOptions: {
-        margins: { marginType: "none" },
-        pageSize: { width: 76200, height: 2000000 },
-      },
-    });
-  }
+    const logoDataUrl = "";
+    const cafePhone = "";
+    const cafeAddress = "";
+    const cartForPrint = params.cartSnapshot && params.cartSnapshot.length > 0 ? params.cartSnapshot : cart;
 
-  if (autoPrintKitchen && receiptKitchenPrinter) {
-    await electronPOS.printKitchen({
-      printerName: receiptKitchenPrinter,
-      html: buildKitchenHtml(orderForPrint),
-      printOptions: {
-        margins: { marginType: "none" },
-        pageSize: { width: 76200, height: 2000000 },
-      },
-    });
-  }
+    const orderForPrint = {
+      order_number: params.orderNumber,
+      created_at: params.createdAt,
+      customer_name: params.customerNameForPrint,
+      payment_method_name: params.paymentMethodName,
+      subtotal: cartSubtotal,
+      discount_total: redeemablePoints + appliedBillDiscount,
+      tax_total: cartTaxTotal,
+      total: cartGrandTotal,
+      logo_data_url: logoDataUrl || null,
+      business_name: "Spill The Tea",
+      business_tagline: "Cafe • Coffee • Tea • Mocktails",
+      business_phone: cafePhone || null,
+      business_address: cafeAddress || null,
+      items: cartForPrint.map((item) => {
+        const modifierTotal = item.modifiers.reduce(
+          (sum, mod) => sum + Number(mod.price_delta || 0),
+          0
+        );
+        const normalUnit = Number(item.base_price || 0) + modifierTotal;
 
-  if (autoPrintStickers && stickerPrinter) {
-    const stickerRows = expandDrinkStickers(orderForPrint);
-    if (stickerRows.length > 0) {
-      await electronPOS.printStickers({
-        printerName: stickerPrinter,
-        html: buildStickerHtml(stickerRows),
+        let unitPrice = normalUnit;
+        if (item.pricing_mode === "complimentary") unitPrice = 0;
+        if (item.pricing_mode === "discounted") {
+          unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
+        }
+
+        return {
+          product_name: item.name,
+          quantity: item.quantity,
+          unit_price: unitPrice,
+          line_total: unitPrice * Number(item.quantity || 0),
+          modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
+          notes: item.notes || null,
+          product_type: "drink",
+        };
+      }),
+    };
+
+    if (autoPrintReceipt && receiptKitchenPrinter) {
+      await electronPOS.printReceipt({
+        printerName: receiptKitchenPrinter,
+        html: buildReceiptHtml(orderForPrint),
         printOptions: {
           margins: { marginType: "none" },
-          pageSize: { width: 50800, height: 25400 },
+          pageSize: { width: 76200, height: 2000000 },
         },
       });
     }
+
+    if (autoPrintKitchen && receiptKitchenPrinter) {
+      await electronPOS.printKitchen({
+        printerName: receiptKitchenPrinter,
+        html: buildKitchenHtml(orderForPrint),
+        printOptions: {
+          margins: { marginType: "none" },
+          pageSize: { width: 76200, height: 2000000 },
+        },
+      });
+    }
+
+    if (!autoPrintStickers) {
+      return {
+        stickerCount: 0,
+        stickerStatus: "Sticker auto print is off",
+      };
+    }
+
+    if (!stickerPrinter) {
+      return {
+        stickerCount: 0,
+        stickerStatus: "Sticker printer not selected",
+      };
+    }
+
+    const stickerRows = buildStickerRowsFromCartSnapshot({
+      cartSnapshot: cartForPrint,
+      orderNumber: params.orderNumber,
+      customerNameForPrint: params.customerNameForPrint,
+    });
+
+    if (stickerRows.length === 0) {
+      return {
+        stickerCount: 0,
+        stickerStatus: "No item stickers needed",
+      };
+    }
+
+    try {
+      const result = await electronPOS.printStickers({
+        printerName: stickerPrinter,
+        html: buildStickerHtml(stickerRows),
+      });
+
+      if (!result?.ok) {
+        return {
+          stickerCount: 0,
+          stickerStatus: `Sticker print failed: ${result?.error || "Unknown error"}`,
+        };
+      }
+
+      return {
+        stickerCount: stickerRows.length,
+        stickerStatus: `${stickerRows.length} sticker(s) sent`,
+      };
+    } catch (error) {
+      return {
+        stickerCount: 0,
+        stickerStatus: error instanceof Error ? `Sticker print failed: ${error.message}` : "Sticker print failed",
+      };
+    }
   }
-}
 
   async function saveCustomerBonus(customerId: number, bonusValue: string) {
     if (!canEditCustomerBonus) {
@@ -5869,19 +5960,23 @@ async function printOrderArtifacts(params: {
         }
       }
 
-      await printOrderArtifacts({
+      const printResult = await printOrderArtifacts({
         orderNumber,
         createdAt: String(orderRow.created_at),
         customerNameForPrint: customer?.name || customerName || "Guest",
         paymentMethodName:
           paymentMethods.find((p) => p.id === selectedPaymentMethodId)?.name || "",
+        cartSnapshot: cart.map((item) => ({
+          ...item,
+          modifiers: [...item.modifiers],
+        })),
       });
 
       setCart([]);
       setRedeemPointsInput("0");
       setCashReceivedInput("");
       resetLineBuilder();
-      setStatusMessage(`Order ${orderNumber} created`);
+      setStatusMessage(`Order ${orderNumber} created | ${printResult.stickerStatus}`);
       await refreshAll();
 
       if (customer) {
