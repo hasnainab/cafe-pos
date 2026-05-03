@@ -135,7 +135,7 @@ type CustomerSummary = {
   total_points_redeemed: number;
 };
 
-type ViewMode = "pos" | "active" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing";
+type ViewMode = "pos" | "active" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing" | "voids";
 
 type ProductForm = {
   id: number | null;
@@ -691,6 +691,8 @@ function randomLineId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const ADMIN_VOID_PIN = "7860";
+
 async function getNextDailyOrderNumber() {
   const now = new Date();
   const dd = String(now.getDate()).padStart(2, "0");
@@ -1042,8 +1044,28 @@ const canViewInventory = currentRole === "admin" || currentRole === "manager";
 const canViewRecipes = currentRole === "admin";
 const canEditCustomerBonus = currentRole === "admin" || currentRole === "manager";
 const canEditSetup = currentRole === "admin";
+const canViewVoids = currentRole === "admin";
 const canApplyDiscount = currentRole === "admin" || currentRole === "manager";
 const canUseInventoryIntake = currentRole === "admin" || currentRole === "manager";
+
+function openAdminVoidsWithPin() {
+  if (!canViewVoids) {
+    setStatusMessage("Admin Void Center is restricted");
+    return;
+  }
+
+  const enteredPin = window.prompt("Enter Admin Void PIN");
+
+  if (enteredPin === null) return;
+
+  if (enteredPin.trim() !== ADMIN_VOID_PIN) {
+    setStatusMessage("Incorrect Admin Void PIN");
+    return;
+  }
+
+  setViewMode("voids");
+  setStatusMessage("Admin Void Center unlocked");
+}
 
   const [viewMode, setViewMode] = useState<ViewMode>("pos");
 
@@ -1108,6 +1130,11 @@ const canUseInventoryIntake = currentRole === "admin" || currentRole === "manage
 
   const [selectedProductForCart, setSelectedProductForCart] = useState<Product | null>(null);
   const [selectedQueueOrder, setSelectedQueueOrder] = useState<OrderView | null>(null);
+  const [voidSearch, setVoidSearch] = useState("");
+  const [voidSearchResults, setVoidSearchResults] = useState<OrderView[]>([]);
+  const [voidReason, setVoidReason] = useState("Customer cancelled");
+  const [voidNotes, setVoidNotes] = useState("");
+  const [voidProcessingOrderId, setVoidProcessingOrderId] = useState<number | null>(null);
   const [selectedModifierIds, setSelectedModifierIds] = useState<number[]>([]);
   const [lineNotes, setLineNotes] = useState("");
   const [linePricingMode, setLinePricingMode] = useState<"normal" | "discounted" | "complimentary">("normal");
@@ -1176,6 +1203,12 @@ const canUseInventoryIntake = currentRole === "admin" || currentRole === "manage
     if (viewMode === "recipes" && !canViewRecipes) {
       setViewMode("pos");
       setStatusMessage("Recipes is restricted for your role");
+      return;
+    }
+
+    if (viewMode === "voids" && !canViewVoids) {
+      setViewMode("pos");
+      setStatusMessage("Admin Void Center is restricted");
     }
   }, [
     authChecked,
@@ -1186,6 +1219,7 @@ const canUseInventoryIntake = currentRole === "admin" || currentRole === "manage
     canViewSetup,
     canViewInventory,
     canViewRecipes,
+    canViewVoids,
   ]);
 
   const [productForm, setProductForm] = useState<ProductForm>({
@@ -2848,7 +2882,9 @@ const canUseInventoryIntake = currentRole === "admin" || currentRole === "manage
 
     if (error) return;
 
-    const todayRows: any[] = todayOrderRows || [];
+    const todayRows: any[] = (todayOrderRows || []).filter(
+      (row: any) => String(row.status || "") !== "Voided"
+    );
     setTodayOrders(todayRows.length);
     setTodaySales(todayRows.reduce((sum, row) => sum + Number(row.total || 0), 0));
     const completedToday = todayRows.filter((row) => row.status === "Collected");
@@ -6008,6 +6044,221 @@ async function printOrderArtifacts(params: {
     }
   }
 
+
+  async function searchVoidOrders() {
+    if (!canViewVoids) {
+      setStatusMessage("Only admins can access voids");
+      return;
+    }
+
+    try {
+      setStatusMessage("Searching orders for void center...");
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(250);
+
+      if (error) {
+        setStatusMessage(`Could not search orders: ${error.message}`);
+        return;
+      }
+
+      const rows = await buildOrdersWithRelations(data || []);
+      const query = voidSearch.trim().toLowerCase();
+
+      const filtered = query
+        ? rows.filter((order) => {
+            const customerName = String(order.customer?.name || "").toLowerCase();
+            const customerPhone = String(order.customer?.phone || "").toLowerCase();
+            const orderNumber = String(order.order_number || "").toLowerCase();
+            const status = String(order.status || "").toLowerCase();
+
+            return (
+              orderNumber.includes(query) ||
+              customerName.includes(query) ||
+              customerPhone.includes(query) ||
+              status.includes(query)
+            );
+          })
+        : rows.slice(0, 50);
+
+      setVoidSearchResults(filtered);
+      setStatusMessage(`Void center loaded ${filtered.length} order(s)`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not search void orders");
+    }
+  }
+
+  async function reverseInventoryMovementsForVoid(order: OrderView) {
+    const { data: existingReversals } = await supabase
+      .from("inventory_movements")
+      .select("id")
+      .eq("order_id", order.id)
+      .eq("movement_type", "void_reversal")
+      .limit(1);
+
+    if (existingReversals && existingReversals.length > 0) {
+      return "Inventory reversal was already recorded earlier.";
+    }
+
+    const { data: movements, error: movementError } = await supabase
+      .from("inventory_movements")
+      .select("*")
+      .eq("order_id", order.id)
+      .in("movement_type", ["sale_deduction", "modifier_deduction"]);
+
+    if (movementError) {
+      throw new Error(`Could not read inventory movements: ${movementError.message}`);
+    }
+
+    const deductionRows = (movements || []).filter(
+      (movement: any) => Number(movement.quantity_change || 0) < 0
+    );
+
+    if (deductionRows.length === 0) {
+      return "No inventory deduction rows found for this order.";
+    }
+
+    const reversalRows = deductionRows.map((movement: any) => ({
+      inventory_item_id: Number(movement.inventory_item_id),
+      order_id: order.id,
+      product_id: movement.product_id == null ? null : Number(movement.product_id),
+      product_name: movement.product_name ?? null,
+      movement_type: "void_reversal",
+      quantity_change: Math.abs(Number(movement.quantity_change || 0)),
+      unit: movement.unit ?? null,
+      batch_id: movement.batch_id ?? null,
+      unit_cost: Number(movement.unit_cost || 0),
+      line_cost: -Math.abs(Number(movement.line_cost || 0)),
+      note: `Void reversal for ${order.order_number}`,
+      created_at: new Date().toISOString(),
+    }));
+
+    const { error: insertError } = await supabase
+      .from("inventory_movements")
+      .insert(reversalRows);
+
+    if (insertError) {
+      throw new Error(`Could not insert inventory reversal: ${insertError.message}`);
+    }
+
+    const stockDeltaByItem = new Map<number, number>();
+    reversalRows.forEach((movement: any) => {
+      const itemId = Number(movement.inventory_item_id || 0);
+      if (!itemId) return;
+      stockDeltaByItem.set(
+        itemId,
+        Number(stockDeltaByItem.get(itemId) || 0) + Number(movement.quantity_change || 0)
+      );
+    });
+
+    for (const [inventoryItemId, quantityToRestore] of stockDeltaByItem.entries()) {
+      const { data: stockRow, error: stockReadError } = await supabase
+        .from("inventory_items")
+        .select("current_stock")
+        .eq("id", inventoryItemId)
+        .single();
+
+      if (stockReadError) {
+        throw new Error(`Could not read inventory stock: ${stockReadError.message}`);
+      }
+
+      const nextStock = Number(stockRow?.current_stock || 0) + Number(quantityToRestore || 0);
+
+      const { error: stockWriteError } = await supabase
+        .from("inventory_items")
+        .update({ current_stock: nextStock })
+        .eq("id", inventoryItemId);
+
+      if (stockWriteError) {
+        throw new Error(`Could not restore inventory stock: ${stockWriteError.message}`);
+      }
+    }
+
+    return `Inventory restored from ${reversalRows.length} movement row(s).`;
+  }
+
+  async function voidOrderAsAdmin(order: OrderView) {
+    if (!canViewVoids) {
+      setStatusMessage("Only admins can void orders");
+      return;
+    }
+
+    if (String(order.status || "") === "Voided") {
+      setStatusMessage("This order is already voided");
+      return;
+    }
+
+    const reason = voidReason.trim();
+    if (!reason) {
+      setStatusMessage("Select a void reason first");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Void ${order.order_number} for ${formatCurrency(Number(order.total || 0))}? This keeps an audit record and removes it from sales totals.`
+    );
+
+    if (!confirmed) return;
+
+    setVoidProcessingOrderId(order.id);
+
+    try {
+      const previousStatus = String(order.status || "");
+      const voidedAt = new Date().toISOString();
+      let inventoryMessage = "Inventory reversal not needed.";
+
+      if (previousStatus === "Completed" || previousStatus === "Collected") {
+        inventoryMessage = await reverseInventoryMovementsForVoid(order);
+      }
+
+      const payload = {
+        status: "Voided",
+        voided_at: voidedAt,
+        voided_by: staffProfile?.id || null,
+        void_reason: reason,
+        void_notes: voidNotes.trim() || null,
+        previous_status_before_void: previousStatus,
+      };
+
+      const { error } = await supabase
+        .from("orders")
+        .update(payload)
+        .eq("id", order.id);
+
+      if (error) {
+        throw new Error(
+          `Could not void order: ${error.message}. Make sure the void columns were added to the orders table.`
+        );
+      }
+
+      await supabase
+        .from("order_costs")
+        .update({
+          notes: `Order voided at ${voidedAt}. Previous status: ${previousStatus}. Reason: ${reason}.`,
+        })
+        .eq("order_id", order.id);
+
+      await recordAuditLog("order_voided", "order", order.id, {
+        order_number: order.order_number,
+        previous_status: previousStatus,
+        reason,
+        notes: voidNotes.trim() || null,
+        inventory_message: inventoryMessage,
+      });
+
+      setVoidNotes("");
+      setStatusMessage(`Order ${order.order_number} voided. ${inventoryMessage}`);
+      await refreshAll();
+      await searchVoidOrders();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not void order");
+    } finally {
+      setVoidProcessingOrderId(null);
+    }
+  }
+
   async function sendReminder(order: OrderView, reminderNumber: 1 | 2) {
     const phone = order.customer?.phone ? normalizePhoneForWhatsApp(order.customer.phone) : "";
     if (!phone) {
@@ -6483,6 +6734,19 @@ async function printOrderArtifacts(params: {
                 {canViewReports ? navButton("dayClose", "Day Close") : null}
                 {canViewReports ? navButton("reorder", "Reorder") : null}
                 {canViewReports ? navButton("recipePricing", "Recipe Pricing") : null}
+                {canViewVoids ? (
+                  <button
+                    type="button"
+                    onClick={openAdminVoidsWithPin}
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                      viewMode === "voids"
+                        ? "bg-rose-500 text-white"
+                        : "bg-white text-rose-800 hover:bg-rose-100"
+                    }`}
+                  >
+                    Admin Voids
+                  </button>
+                ) : null}
                 {canViewSetup ? navButton("setup", "Setup") : null}
                 {canViewRecipes ? navButton("recipes", "Product Recipes") : null}
                 <button
@@ -7086,6 +7350,152 @@ async function printOrderArtifacts(params: {
                 <p className="text-rose-700/70">No completed orders yet.</p>
               ) : (
                 completedOrders.map((order) => renderOrderCard(order, true))
+              )}
+            </div>
+          </section>
+        )}
+
+        {viewMode === "voids" && canViewVoids && (
+          <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-500">Admin Only</p>
+                <h2 className="mt-1 text-2xl font-semibold text-rose-950">Void Order Center</h2>
+                <p className="mt-1 max-w-3xl text-sm text-rose-700/70">
+                  Hidden from cashier and manager roles and protected with an extra PIN. Use this page only for duplicate orders, wrong entries, failed payments, tests, or cancelled orders.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={searchVoidOrders}
+                className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-600"
+              >
+                Load recent orders
+              </button>
+            </div>
+
+            <div className="grid gap-4 rounded-2xl border border-rose-100 bg-rose-50 p-4 lg:grid-cols-[1fr_260px_1fr_auto]">
+              <label className="text-sm font-medium text-rose-950">
+                Search order / customer / phone
+                <input
+                  value={voidSearch}
+                  onChange={(event) => setVoidSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") searchVoidOrders();
+                  }}
+                  placeholder="STT-03-0013, phone, name, status"
+                  className="mt-2 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm outline-none focus:border-rose-400"
+                />
+              </label>
+
+              <label className="text-sm font-medium text-rose-950">
+                Void reason
+                <select
+                  value={voidReason}
+                  onChange={(event) => setVoidReason(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm outline-none focus:border-rose-400"
+                >
+                  <option>Customer cancelled</option>
+                  <option>Wrong item entered</option>
+                  <option>Duplicate order</option>
+                  <option>Payment failed</option>
+                  <option>Test order</option>
+                  <option>Other</option>
+                </select>
+              </label>
+
+              <label className="text-sm font-medium text-rose-950">
+                Notes
+                <input
+                  value={voidNotes}
+                  onChange={(event) => setVoidNotes(event.target.value)}
+                  placeholder="Optional internal note"
+                  className="mt-2 w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm outline-none focus:border-rose-400"
+                />
+              </label>
+
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={searchVoidOrders}
+                  className="w-full rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                >
+                  Search
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {voidSearchResults.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 p-6 text-sm text-rose-700/70">
+                  No orders loaded yet. Search by order number, phone, customer name, or click Load recent orders.
+                </div>
+              ) : (
+                voidSearchResults.map((order) => {
+                  const isVoided = String(order.status || "") === "Voided";
+                  return (
+                    <div
+                      key={`void-${order.id}`}
+                      className={`rounded-2xl border p-4 ${
+                        isVoided ? "border-slate-200 bg-slate-50" : "border-rose-100 bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-lg font-bold text-rose-950">{order.order_number}</h3>
+                            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                              isVoided ? "bg-slate-200 text-slate-700" : "bg-rose-100 text-rose-700"
+                            }`}>
+                              {order.status}
+                            </span>
+                            <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-rose-700 ring-1 ring-rose-100">
+                              {formatCurrency(Number(order.total || 0))}
+                            </span>
+                          </div>
+                          <div className="mt-2 grid gap-2 text-sm text-rose-700/80 md:grid-cols-2">
+                            <div>Customer: <span className="font-semibold text-rose-950">{order.customer?.name || "Guest"}</span></div>
+                            <div>Phone: <span className="font-semibold text-rose-950">{order.customer?.phone || "-"}</span></div>
+                            <div>Payment: <span className="font-semibold text-rose-950">{order.payment_method_name || "-"}</span></div>
+                            <div>Created: <span className="font-semibold text-rose-950">{formatTime(order.created_at)}</span></div>
+                          </div>
+
+                          <div className="mt-3 space-y-1 text-sm">
+                            {order.items.length === 0 ? (
+                              <p className="text-rose-700/60">No item rows found.</p>
+                            ) : (
+                              order.items.map((item, index) => (
+                                <div key={`${order.id}-${index}`} className="rounded-xl bg-rose-50 px-3 py-2 text-rose-900">
+                                  <div className="font-semibold">{item.quantity} x {item.product_name}</div>
+                                  {item.modifiers_text ? <div className="text-xs text-rose-700/70">Modifiers: {item.modifiers_text}</div> : null}
+                                  {item.notes ? <div className="text-xs text-rose-700/70">Notes: {item.notes}</div> : null}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex w-full flex-col gap-2 lg:w-44">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedQueueOrder(order)}
+                            className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                          >
+                            Details
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => voidOrderAsAdmin(order)}
+                            disabled={isVoided || voidProcessingOrderId === order.id}
+                            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          >
+                            {isVoided ? "Already voided" : voidProcessingOrderId === order.id ? "Voiding..." : "Void order"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>
