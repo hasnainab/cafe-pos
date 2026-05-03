@@ -5162,21 +5162,21 @@ function openAdminVoidsWithPin() {
       return;
     }
 
-    const stickerHtml = buildSimpleStickerHtml([
-      {
-        orderNumber: "STT-30-0001",
-        customerName: "ALI",
-        drinkName: "Cappuccino",
-        modifiers: "Oat Milk | Less Sugar",
-        notes: "No Foam",
-        countLabel: "1/3",
-      },
-    ]);
+    const stickerHtml = buildSingleStickerHtml({
+      orderNumber: "STT-30-0001",
+      customerName: "ALI",
+      drinkName: "Cappuccino",
+      modifiers: "Oat Milk | Less Sugar",
+      notes: "No Foam",
+      countLabel: "1/3",
+    });
 
     const result = await electronPOS.printStickers({
       printerName: stickerPrinter,
       html: stickerHtml,
       printOptions: {
+        silent: true,
+        printBackground: true,
         margins: { marginType: "none" },
         pageSize: { width: 50800, height: 25400 },
       },
@@ -5241,6 +5241,23 @@ function openAdminVoidsWithPin() {
     return rows;
   }
 
+  function waitForPrintQueue(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function escapeStickerHtml(value: string | number | null | undefined) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function waitForPrintQueue(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
   function escapeStickerHtml(value: string | number | null | undefined) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -5268,16 +5285,16 @@ function openAdminVoidsWithPin() {
         const notes = escapeStickerHtml(row.notes || "");
 
         return `
-          <section class="label">
-            <div class="label-top">
-              <div class="customer">${customer}</div>
-              <div class="count">${countLabel}</div>
+          <div class="label">
+            <div class="line header">
+              <span class="customer">${customer}</span>
+              <span class="count">${countLabel}</span>
             </div>
             <div class="item">${itemName}</div>
-            ${modifiers ? `<div class="details">${modifiers}</div>` : ""}
-            ${notes ? `<div class="notes">${notes}</div>` : ""}
-            <div class="order">${orderNumber}</div>
-          </section>
+            ${modifiers ? `<div class="line small">MOD: ${modifiers}</div>` : ""}
+            ${notes ? `<div class="line small">NOTE: ${notes}</div>` : ""}
+            <div class="line order">${orderNumber}</div>
+          </div>
         `;
       })
       .join("");
@@ -5293,13 +5310,11 @@ function openAdminVoidsWithPin() {
               margin: 0;
             }
 
-            * {
-              box-sizing: border-box;
-            }
-
             html,
             body {
               width: 2in;
+              min-width: 2in;
+              max-width: 2in;
               margin: 0;
               padding: 0;
               background: #ffffff;
@@ -5309,22 +5324,19 @@ function openAdminVoidsWithPin() {
               print-color-adjust: exact;
             }
 
-            body {
-              font-size: 12px;
-            }
-
             .label {
               width: 2in;
               height: 1in;
+              min-height: 1in;
+              max-height: 1in;
+              margin: 0;
+              padding: 0.055in 0.065in;
               overflow: hidden;
               page-break-after: always;
               break-after: page;
-              padding: 0.055in 0.065in;
-              display: flex;
-              flex-direction: column;
-              justify-content: flex-start;
-              background: #ffffff;
               color: #000000;
+              background: #ffffff;
+              font-family: Arial, Helvetica, sans-serif;
             }
 
             .label:last-child {
@@ -5332,80 +5344,82 @@ function openAdminVoidsWithPin() {
               break-after: auto;
             }
 
-            .label-top {
-              display: flex;
-              justify-content: space-between;
-              gap: 0.04in;
-              align-items: flex-start;
+            .line {
+              display: block;
               width: 100%;
-            }
-
-            .customer {
-              max-width: 1.35in;
-              font-size: 12px;
-              line-height: 1;
-              font-weight: 900;
+              color: #000000;
               white-space: nowrap;
               overflow: hidden;
               text-overflow: ellipsis;
-              color: #000000;
+              line-height: 1;
+            }
+
+            .header {
+              font-size: 12px;
+              font-weight: 900;
+              margin-bottom: 0.04in;
+            }
+
+            .customer {
+              display: inline-block;
+              width: 1.35in;
+              max-width: 1.35in;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              vertical-align: top;
             }
 
             .count {
-              font-size: 10px;
-              line-height: 1;
-              font-weight: 900;
+              display: inline-block;
+              width: 0.38in;
+              max-width: 0.38in;
+              text-align: right;
               white-space: nowrap;
-              color: #000000;
+              vertical-align: top;
             }
 
             .item {
-              margin-top: 0.055in;
-              font-size: 15px;
-              line-height: 1.02;
+              display: block;
+              width: 100%;
+              color: #000000;
+              font-size: 16px;
+              line-height: 1;
               font-weight: 900;
               text-transform: uppercase;
               white-space: nowrap;
               overflow: hidden;
               text-overflow: ellipsis;
-              color: #000000;
+              margin-bottom: 0.04in;
             }
 
-            .details {
-              margin-top: 0.035in;
+            .small {
               font-size: 8px;
-              line-height: 1;
               font-weight: 800;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              color: #000000;
-            }
-
-            .notes {
-              margin-top: 0.025in;
-              font-size: 8px;
-              line-height: 1;
-              font-weight: 700;
-              font-style: italic;
-              white-space: nowrap;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              color: #000000;
+              margin-bottom: 0.025in;
             }
 
             .order {
-              margin-top: auto;
-              font-size: 9px;
-              line-height: 1;
+              font-size: 10px;
               font-weight: 900;
-              color: #000000;
+              margin-top: 0.025in;
             }
           </style>
         </head>
         <body>${pages}</body>
       </html>
     `;
+  }
+
+  function buildSingleStickerHtml(row: {
+    orderNumber: string;
+    customerName: string;
+    drinkName: string;
+    modifiers: string;
+    notes: string;
+    countLabel: string;
+  }) {
+    return buildSimpleStickerHtml([row]);
   }
 
   async function printOrderArtifacts(params: {
@@ -5561,28 +5575,63 @@ function openAdminVoidsWithPin() {
           stickerStatus = "No item stickers needed";
         } else {
           try {
-            const stickerHtml = buildSimpleStickerHtml(
-              stickerRows.map((row) => ({
-                ...row,
-                orderNumber: params.orderNumber,
-                customerName: params.customerNameForPrint || "Guest",
-              }))
-            );
+            const normalizedStickerRows = stickerRows.map((row) => ({
+              ...row,
+              orderNumber: params.orderNumber,
+              customerName: params.customerNameForPrint || "Guest",
+            }));
 
-            const stickerResult = await electronPOS.printStickers({
-              printerName: stickerPrinter,
-              html: stickerHtml,
-              printOptions: {
-                margins: { marginType: "none" },
-                pageSize: { width: 50800, height: 25400 },
-              },
-            });
+            let sentCount = 0;
+            const failedLabels: string[] = [];
 
-            if (stickerResult?.ok === false) {
-              stickerStatus = `Sticker failed: ${stickerResult?.error || "Unknown error"}`;
+            await waitForPrintQueue(700);
+
+            for (let index = 0; index < normalizedStickerRows.length; index += 1) {
+              const row = normalizedStickerRows[index];
+              const labelName = `${row.drinkName} ${row.countLabel}`;
+              let printed = false;
+              let lastError = "";
+
+              for (let attempt = 1; attempt <= 2; attempt += 1) {
+                try {
+                  const stickerResult = await electronPOS.printStickers({
+                    printerName: stickerPrinter,
+                    html: buildSingleStickerHtml(row),
+                    printOptions: {
+                      silent: true,
+                      printBackground: true,
+                      margins: { marginType: "none" },
+                      pageSize: { width: 50800, height: 25400 },
+                    },
+                  });
+
+                  if (stickerResult?.ok === false) {
+                    lastError = stickerResult?.error || "Unknown error";
+                  } else {
+                    printed = true;
+                    sentCount += 1;
+                    break;
+                  }
+                } catch (error) {
+                  lastError = error instanceof Error ? error.message : "Unknown error";
+                }
+
+                await waitForPrintQueue(600);
+              }
+
+              if (!printed) {
+                failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+              }
+
+              await waitForPrintQueue(450);
+            }
+
+            stickerCount = sentCount;
+
+            if (failedLabels.length > 0) {
+              stickerStatus = `${sentCount}/${normalizedStickerRows.length} sticker(s) sent. Failed: ${failedLabels.join("; ")}`;
             } else {
-              stickerCount = stickerRows.length;
-              stickerStatus = `${stickerRows.length} sticker(s) sent`;
+              stickerStatus = `${sentCount} sticker(s) sent`;
             }
           } catch (error) {
             stickerStatus = error instanceof Error ? `Sticker failed: ${error.message}` : "Sticker failed";
