@@ -5411,6 +5411,155 @@ function openAdminVoidsWithPin() {
     `;
   }
 
+  function buildStickerRollHtml(stickerRows: Array<{
+    orderNumber: string;
+    customerName: string;
+    drinkName: string;
+    modifiers: string;
+    notes: string;
+    countLabel: string;
+  }>) {
+    const labels = stickerRows
+      .map((row) => {
+        const customer = escapeStickerHtml(row.customerName || "Guest");
+        const orderNumber = escapeStickerHtml(row.orderNumber || "");
+        const itemName = escapeStickerHtml(row.drinkName || "");
+        const countLabel = escapeStickerHtml(row.countLabel || "");
+        const modifiers = escapeStickerHtml(row.modifiers || "");
+        const notes = escapeStickerHtml(row.notes || "");
+
+        return `
+          <div class="label">
+            <div class="top-row">
+              <div class="customer">${customer}</div>
+              <div class="count">${countLabel}</div>
+            </div>
+            <div class="item-name">${itemName}</div>
+            ${modifiers ? `<div class="mini">MOD: ${modifiers}</div>` : ""}
+            ${notes ? `<div class="mini">NOTE: ${notes}</div>` : ""}
+            <div class="order-number">${orderNumber}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    return `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            @page {
+              size: 2in 1in;
+              margin: 0;
+            }
+
+            html,
+            body {
+              width: 2in;
+              margin: 0;
+              padding: 0;
+              background: #ffffff;
+              color: #000000;
+              font-family: Arial, Helvetica, sans-serif;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+
+            .label {
+              width: 2in;
+              height: 1in;
+              max-height: 1in;
+              min-height: 1in;
+              overflow: hidden;
+              margin: 0;
+              padding: 0.055in 0.065in;
+              box-sizing: border-box;
+              color: #000000;
+              background: #ffffff;
+              font-family: Arial, Helvetica, sans-serif;
+              page-break-after: always;
+              break-after: page;
+            }
+
+            .label:last-child {
+              page-break-after: auto;
+              break-after: auto;
+            }
+
+            .top-row {
+              display: table;
+              width: 100%;
+              table-layout: fixed;
+              margin: 0 0 0.04in 0;
+            }
+
+            .customer,
+            .count {
+              display: table-cell;
+              color: #000000;
+              font-size: 12px;
+              line-height: 1;
+              font-weight: 900;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              vertical-align: top;
+            }
+
+            .customer {
+              width: 1.36in;
+              text-align: left;
+            }
+
+            .count {
+              width: 0.36in;
+              text-align: right;
+            }
+
+            .item-name {
+              display: block;
+              width: 100%;
+              color: #000000;
+              font-size: 16px;
+              line-height: 1;
+              font-weight: 900;
+              text-transform: uppercase;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              margin: 0 0 0.04in 0;
+            }
+
+            .mini {
+              display: block;
+              width: 100%;
+              color: #000000;
+              font-size: 8px;
+              line-height: 1;
+              font-weight: 800;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              margin: 0 0 0.025in 0;
+            }
+
+            .order-number {
+              display: block;
+              width: 100%;
+              color: #000000;
+              font-size: 10px;
+              line-height: 1;
+              font-weight: 900;
+              margin-top: 0.03in;
+            }
+          </style>
+        </head>
+        <body>${labels}</body>
+      </html>
+    `;
+  }
+
   function buildSingleStickerHtml(row: {
     orderNumber: string;
     customerName: string;
@@ -5594,57 +5743,75 @@ function openAdminVoidsWithPin() {
               customerName: params.customerNameForPrint || "Guest",
             }));
 
-            let sentCount = 0;
-            const failedLabels: string[] = [];
+            await waitForPrintQueue(1000);
 
-            await waitForPrintQueue(700);
+            const rollResult = await electronPOS.printStickers({
+              printerName: stickerPrinter,
+              html: buildStickerRollHtml(normalizedStickerRows),
+              printOptions: {
+                silent: true,
+                printBackground: true,
+                margins: { marginType: "none" },
+                pageSize: { width: 50800, height: 25400 },
+              },
+            });
 
-            for (let index = 0; index < normalizedStickerRows.length; index += 1) {
-              const row = normalizedStickerRows[index];
-              const labelName = `${row.drinkName} ${row.countLabel}`;
-              let printed = false;
-              let lastError = "";
+            if (rollResult?.ok === false) {
+              let sentCount = 0;
+              const failedLabels: string[] = [];
 
-              for (let attempt = 1; attempt <= 2; attempt += 1) {
-                try {
-                  const stickerResult = await electronPOS.printStickers({
-                    printerName: stickerPrinter,
-                    html: buildSingleStickerHtml(row),
-                    printOptions: {
-                      silent: true,
-                      printBackground: true,
-                      margins: { marginType: "none" },
-                      pageSize: { width: 50800, height: 25400 },
-                    },
-                  });
+              await waitForPrintQueue(1400);
 
-                  if (stickerResult?.ok === false) {
-                    lastError = stickerResult?.error || "Unknown error";
-                  } else {
-                    printed = true;
-                    sentCount += 1;
-                    break;
+              for (let index = 0; index < normalizedStickerRows.length; index += 1) {
+                const row = normalizedStickerRows[index];
+                const labelName = `${row.drinkName} ${row.countLabel}`;
+                let printed = false;
+                let lastError = rollResult?.error || "Combined sticker job failed";
+
+                for (let attempt = 1; attempt <= 2; attempt += 1) {
+                  try {
+                    const stickerResult = await electronPOS.printStickers({
+                      printerName: stickerPrinter,
+                      html: buildSingleStickerHtml(row),
+                      printOptions: {
+                        silent: true,
+                        printBackground: true,
+                        margins: { marginType: "none" },
+                        pageSize: { width: 50800, height: 25400 },
+                      },
+                    });
+
+                    if (stickerResult?.ok === false) {
+                      lastError = stickerResult?.error || "Unknown error";
+                    } else {
+                      printed = true;
+                      sentCount += 1;
+                      break;
+                    }
+                  } catch (error) {
+                    lastError = error instanceof Error ? error.message : "Unknown error";
                   }
-                } catch (error) {
-                  lastError = error instanceof Error ? error.message : "Unknown error";
+
+                  await waitForPrintQueue(1200);
                 }
 
-                await waitForPrintQueue(600);
+                if (!printed) {
+                  failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+                }
+
+                await waitForPrintQueue(1200);
               }
 
-              if (!printed) {
-                failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+              stickerCount = sentCount;
+
+              if (failedLabels.length > 0) {
+                stickerStatus = `${sentCount}/${normalizedStickerRows.length} sticker(s) sent. Failed: ${failedLabels.join("; ")}`;
+              } else {
+                stickerStatus = `${sentCount} sticker(s) sent`;
               }
-
-              await waitForPrintQueue(450);
-            }
-
-            stickerCount = sentCount;
-
-            if (failedLabels.length > 0) {
-              stickerStatus = `${sentCount}/${normalizedStickerRows.length} sticker(s) sent. Failed: ${failedLabels.join("; ")}`;
             } else {
-              stickerStatus = `${sentCount} sticker(s) sent`;
+              stickerCount = normalizedStickerRows.length;
+              stickerStatus = `${normalizedStickerRows.length} sticker(s) sent`;
             }
           } catch (error) {
             stickerStatus = error instanceof Error ? `Sticker failed: ${error.message}` : "Sticker failed";
@@ -5826,55 +5993,71 @@ function openAdminVoidsWithPin() {
 
       await waitForPrintQueue(700);
 
-      for (let index = 0; index < stickerRows.length; index += 1) {
-        const row = {
-          ...stickerRows[index],
-          orderNumber: order.order_number,
-          customerName: order.customer?.name || "Guest",
-        };
+      const normalizedStickerRows = stickerRows.map((row) => ({
+        ...row,
+        orderNumber: order.order_number,
+        customerName: order.customer?.name || "Guest",
+      }));
 
-        const labelName = `${row.drinkName} ${row.countLabel}`;
-        let printed = false;
-        let lastError = "";
+      const rollResult = await electronPOS.printStickers({
+        printerName: stickerPrinter,
+        html: buildStickerRollHtml(normalizedStickerRows),
+        printOptions: {
+          silent: true,
+          printBackground: true,
+          margins: { marginType: "none" },
+          pageSize: { width: 50800, height: 25400 },
+        },
+      });
 
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          try {
-            const result = await electronPOS.printStickers({
-              printerName: stickerPrinter,
-              html: buildSingleStickerHtml(row),
-              printOptions: {
-                silent: true,
-                printBackground: true,
-                margins: { marginType: "none" },
-                pageSize: { width: 50800, height: 25400 },
-              },
-            });
+      if (rollResult?.ok === false) {
+        for (let index = 0; index < normalizedStickerRows.length; index += 1) {
+          const row = normalizedStickerRows[index];
+          const labelName = `${row.drinkName} ${row.countLabel}`;
+          let printed = false;
+          let lastError = rollResult?.error || "Combined sticker job failed";
 
-            if (result?.ok === false) {
-              lastError = result?.error || "Unknown error";
-            } else {
-              printed = true;
-              sentCount += 1;
-              break;
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            try {
+              const result = await electronPOS.printStickers({
+                printerName: stickerPrinter,
+                html: buildSingleStickerHtml(row),
+                printOptions: {
+                  silent: true,
+                  printBackground: true,
+                  margins: { marginType: "none" },
+                  pageSize: { width: 50800, height: 25400 },
+                },
+              });
+
+              if (result?.ok === false) {
+                lastError = result?.error || "Unknown error";
+              } else {
+                printed = true;
+                sentCount += 1;
+                break;
+              }
+            } catch (error) {
+              lastError = error instanceof Error ? error.message : "Unknown error";
             }
-          } catch (error) {
-            lastError = error instanceof Error ? error.message : "Unknown error";
+
+            await waitForPrintQueue(1200);
           }
 
-          await waitForPrintQueue(600);
+          if (!printed) {
+            failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+          }
+
+          await waitForPrintQueue(1200);
         }
 
-        if (!printed) {
-          failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+        if (failedLabels.length > 0) {
+          setStatusMessage(`${sentCount}/${normalizedStickerRows.length} sticker(s) reprinted for ${order.order_number}. Failed: ${failedLabels.join("; ")}`);
+        } else {
+          setStatusMessage(`${sentCount} sticker(s) reprinted for ${order.order_number}`);
         }
-
-        await waitForPrintQueue(450);
-      }
-
-      if (failedLabels.length > 0) {
-        setStatusMessage(`${sentCount}/${stickerRows.length} sticker(s) reprinted for ${order.order_number}. Failed: ${failedLabels.join("; ")}`);
       } else {
-        setStatusMessage(`${sentCount} sticker(s) reprinted for ${order.order_number}`);
+        setStatusMessage(`${normalizedStickerRows.length} sticker(s) reprinted for ${order.order_number}`);
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? `Sticker reprint failed: ${error.message}` : "Sticker reprint failed");
