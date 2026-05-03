@@ -5661,6 +5661,226 @@ function openAdminVoidsWithPin() {
     };
   }
 
+
+  function buildCartSnapshotFromOrder(order: OrderView): CartItem[] {
+    return (order.items || []).map((item, index) => ({
+      line_id: `reprint-${order.id}-${index}`,
+      product_id: Number(item.product_id || 0),
+      name: String(item.product_name || "Item"),
+      base_price: Number(item.unit_price || 0),
+      quantity: Math.max(1, Number(item.quantity || 1)),
+      modifiers: String(item.modifiers_text || "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .map((name, modifierIndex) => ({
+          id: Number(`${order.id}${index}${modifierIndex}`.slice(0, 9)) || modifierIndex,
+          name,
+          price_delta: 0,
+          active: true,
+        })),
+      notes: item.notes || "",
+      pricing_mode: "normal",
+      discounted_unit_price: null,
+    }));
+  }
+
+  function buildOrderPrintPayloadFromOrder(order: OrderView) {
+    return {
+      order_number: order.order_number,
+      created_at: order.created_at,
+      customer_name: order.customer?.name || "Guest",
+      payment_method_name: order.payment_method_name || "",
+      subtotal: Number(order.subtotal || 0),
+      discount_total: Number(order.discount_total || 0),
+      tax_total: Number(order.tax_total || 0),
+      total: Number(order.total || 0),
+      logo_data_url: null,
+      business_name: "Spill The Tea",
+      business_tagline: "Cafe • Coffee • Tea • Mocktails",
+      business_phone: null,
+      business_address: null,
+      items: (order.items || []).map((item) => ({
+        product_name: item.product_name,
+        quantity: Number(item.quantity || 0),
+        unit_price: Number(item.unit_price || 0),
+        line_total: Number(item.line_total || 0),
+        modifiers_text: item.modifiers_text || null,
+        notes: item.notes || null,
+        product_type: "drink",
+      })),
+    };
+  }
+
+  async function reprintReceipt(order: OrderView) {
+    const electronPOS = (window as any).electronPOS;
+
+    if (!electronPOS) {
+      setStatusMessage("Printer bridge not available");
+      return;
+    }
+
+    if (!receiptKitchenPrinter) {
+      setStatusMessage("Receipt printer not selected");
+      return;
+    }
+
+    try {
+      const orderForPrint = buildOrderPrintPayloadFromOrder(order);
+      const result = await electronPOS.printReceipt({
+        printerName: receiptKitchenPrinter,
+        html: fitThermalReceiptHtml(buildReceiptHtml(orderForPrint)),
+        printOptions: {
+          margins: { marginType: "none" },
+          pageSize: { width: 72000, height: 2000000 },
+        },
+      });
+
+      if (result?.ok === false) {
+        setStatusMessage(`Receipt reprint failed: ${result?.error || "Unknown error"}`);
+        return;
+      }
+
+      setStatusMessage(`Receipt reprinted for ${order.order_number}`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? `Receipt reprint failed: ${error.message}` : "Receipt reprint failed");
+    }
+  }
+
+  async function reprintKitchenTicket(order: OrderView) {
+    const electronPOS = (window as any).electronPOS;
+
+    if (!electronPOS) {
+      setStatusMessage("Printer bridge not available");
+      return;
+    }
+
+    if (!receiptKitchenPrinter) {
+      setStatusMessage("Kitchen printer not selected");
+      return;
+    }
+
+    try {
+      const orderForPrint = buildOrderPrintPayloadFromOrder(order);
+      const kitchenHeaderHtml = `
+        <div style="text-align:center;font-family:Arial,sans-serif;margin:0 0 8px 0;padding:0 0 8px 0;border-bottom:1px dashed #000;">
+          <div style="font-size:18px;font-weight:800;">${order.order_number}</div>
+          <div style="font-size:14px;font-weight:700;">Customer: ${order.customer?.name || "Guest"}</div>
+        </div>
+      `;
+
+      const result = await electronPOS.printKitchen({
+        printerName: receiptKitchenPrinter,
+        html: fitThermalReceiptHtml(
+          buildKitchenHtml({
+            ...orderForPrint,
+            customer_name: order.customer?.name || "Guest",
+            order_number: order.order_number,
+          }).replace("<body>", `<body>${kitchenHeaderHtml}`)
+        ),
+        printOptions: {
+          margins: { marginType: "none" },
+          pageSize: { width: 72000, height: 2000000 },
+        },
+      });
+
+      if (result?.ok === false) {
+        setStatusMessage(`Kitchen reprint failed: ${result?.error || "Unknown error"}`);
+        return;
+      }
+
+      setStatusMessage(`Kitchen ticket reprinted for ${order.order_number}`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? `Kitchen reprint failed: ${error.message}` : "Kitchen reprint failed");
+    }
+  }
+
+  async function reprintStickers(order: OrderView) {
+    const electronPOS = (window as any).electronPOS;
+
+    if (!electronPOS) {
+      setStatusMessage("Printer bridge not available");
+      return;
+    }
+
+    if (!stickerPrinter) {
+      setStatusMessage("Sticker printer not selected");
+      return;
+    }
+
+    const cartSnapshot = buildCartSnapshotFromOrder(order);
+    const stickerRows = buildStickerRowsFromCartSnapshot({
+      cartSnapshot,
+      orderNumber: order.order_number,
+      customerNameForPrint: order.customer?.name || "Guest",
+    });
+
+    if (stickerRows.length === 0) {
+      setStatusMessage(`No stickers found for ${order.order_number}`);
+      return;
+    }
+
+    try {
+      let sentCount = 0;
+      const failedLabels: string[] = [];
+
+      await waitForPrintQueue(700);
+
+      for (let index = 0; index < stickerRows.length; index += 1) {
+        const row = {
+          ...stickerRows[index],
+          orderNumber: order.order_number,
+          customerName: order.customer?.name || "Guest",
+        };
+
+        const labelName = `${row.drinkName} ${row.countLabel}`;
+        let printed = false;
+        let lastError = "";
+
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          try {
+            const result = await electronPOS.printStickers({
+              printerName: stickerPrinter,
+              html: buildSingleStickerHtml(row),
+              printOptions: {
+                silent: true,
+                printBackground: true,
+                margins: { marginType: "none" },
+                pageSize: { width: 50800, height: 25400 },
+              },
+            });
+
+            if (result?.ok === false) {
+              lastError = result?.error || "Unknown error";
+            } else {
+              printed = true;
+              sentCount += 1;
+              break;
+            }
+          } catch (error) {
+            lastError = error instanceof Error ? error.message : "Unknown error";
+          }
+
+          await waitForPrintQueue(600);
+        }
+
+        if (!printed) {
+          failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
+        }
+
+        await waitForPrintQueue(450);
+      }
+
+      if (failedLabels.length > 0) {
+        setStatusMessage(`${sentCount}/${stickerRows.length} sticker(s) reprinted for ${order.order_number}. Failed: ${failedLabels.join("; ")}`);
+      } else {
+        setStatusMessage(`${sentCount} sticker(s) reprinted for ${order.order_number}`);
+      }
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? `Sticker reprint failed: ${error.message}` : "Sticker reprint failed");
+    }
+  }
+
   async function saveCustomerBonus(customerId: number, bonusValue: string) {
     if (!canEditCustomerBonus) {
       setStatusMessage("You do not have permission to change customer bonus");
@@ -6793,6 +7013,28 @@ function openAdminVoidsWithPin() {
                 </button>
               </>
             ) : null}
+
+            <button
+              type="button"
+              onClick={() => reprintReceipt(order)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Reprint Receipt
+            </button>
+            <button
+              type="button"
+              onClick={() => reprintKitchenTicket(order)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Reprint Kitchen
+            </button>
+            <button
+              type="button"
+              onClick={() => reprintStickers(order)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Reprint Stickers
+            </button>
           </div>
         ) : null}
       </div>
@@ -6929,6 +7171,30 @@ function openAdminVoidsWithPin() {
               Collected
             </button>
           )}
+        </div>
+
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => reprintReceipt(order)}
+            className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Receipt
+          </button>
+          <button
+            type="button"
+            onClick={() => reprintKitchenTicket(order)}
+            className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Kitchen
+          </button>
+          <button
+            type="button"
+            onClick={() => reprintStickers(order)}
+            className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Stickers
+          </button>
         </div>
       </div>
     );
