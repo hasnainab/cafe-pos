@@ -11,7 +11,6 @@ import {
   expandDrinkStickers,
 } from "../../lib/print-helpers";
 import ProductModifierModal from "./ProductModifierModal";
-import ActiveOrderQueueCard from "./ActiveOrderQueueCard";
 
 type Category = {
   id: string;
@@ -6168,18 +6167,133 @@ async function printOrderArtifacts(params: {
       order.created_at,
       order.status === "Ready" ? order.ready_at || undefined : undefined
     );
+    const customerDisplayName = order.customer?.name?.trim() || "Guest";
+    const customerPhoneDisplay = order.customer?.phone?.trim() || "-";
+    const visibleItems = (order.items || []).slice(0, 4);
+    const remainingItemCount = Math.max(0, (order.items || []).length - visibleItems.length);
+    const itemNotes = (order.items || [])
+      .map((item) => String(item.notes || "").trim())
+      .filter(Boolean);
+    const itemModifiers = (order.items || [])
+      .map((item) => String(item.modifiers_text || "").trim())
+      .filter(Boolean);
 
     return (
-      <ActiveOrderQueueCard
+      <div
         key={`summary-${order.id}`}
-        order={order}
-        mounted={mounted}
-        ageSeconds={ageSeconds}
-        formatDurationFromSeconds={formatDurationFromSeconds}
-        onDetails={() => setSelectedQueueOrder(order)}
-        onReady={() => markOrderReady(order.id)}
-        onCollected={() => markOrderCollected(order.id)}
-      />
+        className="rounded-2xl border border-rose-200 bg-white p-3 text-left shadow-sm transition hover:border-rose-300 hover:bg-rose-50/40"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-base font-bold text-slate-950">
+              {customerDisplayName}
+            </div>
+            <div className="mt-0.5 text-xs font-semibold text-rose-600">
+              {order.order_number}
+            </div>
+          </div>
+          <span
+            className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${
+              order.status === "Ready"
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-rose-50 text-rose-700"
+            }`}
+          >
+            {order.status}
+          </span>
+        </div>
+
+        <div className="mt-2 grid gap-1 text-[11px] text-slate-600">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-slate-500">Phone</span>
+            <span className="truncate text-right font-semibold text-slate-800">{customerPhoneDisplay}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-slate-500">Time</span>
+            <span className="font-semibold text-rose-600">
+              {mounted ? formatDurationFromSeconds(ageSeconds) : "-"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-slate-500">Total</span>
+            <span className="font-semibold text-slate-900">{formatCurrency(order.total)}</span>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl bg-rose-50/70 p-2">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-rose-700/70">
+            Items
+          </div>
+          <div className="space-y-1">
+            {visibleItems.length > 0 ? (
+              visibleItems.map((item, index) => (
+                <div key={`${order.id}-queue-item-${index}`} className="text-xs text-slate-800">
+                  <span className="font-bold">{Number(item.quantity || 0)}x</span> {item.product_name}
+                  {item.modifiers_text ? (
+                    <span className="block pl-4 text-[11px] text-slate-500">
+                      + {item.modifiers_text}
+                    </span>
+                  ) : null}
+                  {item.notes ? (
+                    <span className="block pl-4 text-[11px] font-medium text-rose-700">
+                      Note: {item.notes}
+                    </span>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-slate-500">No item detail saved</div>
+            )}
+            {remainingItemCount > 0 ? (
+              <div className="text-[11px] font-medium text-slate-500">
+                + {remainingItemCount} more item{remainingItemCount === 1 ? "" : "s"}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {itemNotes.length > 0 || itemModifiers.length > 0 ? (
+          <div className="mt-2 rounded-xl border border-rose-100 bg-white px-2 py-2 text-[11px] text-slate-600">
+            {itemNotes.length > 0 ? (
+              <div>
+                <span className="font-bold text-rose-700">Notes:</span> {itemNotes.join(" | ")}
+              </div>
+            ) : null}
+            {itemModifiers.length > 0 ? (
+              <div className={itemNotes.length > 0 ? "mt-1" : ""}>
+                <span className="font-bold text-rose-700">Modifiers:</span> {itemModifiers.join(" | ")}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedQueueOrder(order)}
+            className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+          >
+            Details
+          </button>
+          {order.status === "Preparing" ? (
+            <button
+              type="button"
+              onClick={() => markOrderReady(order.id)}
+              className="rounded-xl bg-rose-500 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-600"
+            >
+              Ready
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => markOrderCollected(order.id)}
+              className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600"
+            >
+              Collected
+            </button>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -6395,7 +6509,7 @@ async function printOrderArtifacts(params: {
 
         {viewMode === "pos" && (
           <div className="mx-auto max-w-[1720px] px-1 pb-2 pt-1 sm:px-2 xl:px-0">
-            <div className="grid gap-4 xl:grid-cols-[150px_minmax(0,1fr)_340px]">
+            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_340px]">
               <section className="xl:sticky xl:top-4 xl:self-start">
                 <section className="rounded-3xl border border-rose-100 bg-white p-3 shadow-sm">
                   <div className="mb-4 flex items-center justify-between gap-3">
