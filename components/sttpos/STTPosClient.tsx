@@ -5422,6 +5422,17 @@ function openAdminVoidsWithPin() {
     return buildSimpleStickerHtml([row]);
   }
 
+  function fitThermalReceiptHtml(html: string) {
+    return String(html || "")
+      .replace(/width:\s*3in;/g, "width: 2.72in;")
+      .replace(/body\s*\{\s*padding:\s*0\.10in 0\.10in 0\.12in;/g, "body { box-sizing: border-box; padding: 0.08in 0.14in 0.12in 0.08in;")
+      .replace(/body\s*\{\s*padding:\s*0\.10in;/g, "body { box-sizing: border-box; padding: 0.08in 0.14in 0.10in 0.08in;")
+      .replace(/\.amount-cell\s*\{\s*text-align:\s*right;/g, ".amount-cell { text-align: right; font-size: 11px;")
+      .replace(/\.item-name\s*\{\s*font-size:\s*12px;/g, ".item-name { font-size: 11px;")
+      .replace(/\.name\s*\{\s*flex:\s*1;\s*font-size:\s*19px;/g, ".name { flex: 1; font-size: 17px;")
+      .replace(/\.qty\s*\{\s*min-width:\s*30px;/g, ".qty { min-width: 26px;");
+  }
+
   async function printOrderArtifacts(params: {
     orderNumber: string;
     createdAt: string;
@@ -5511,10 +5522,10 @@ function openAdminVoidsWithPin() {
         try {
           const receiptResult = await electronPOS.printReceipt({
             printerName: receiptKitchenPrinter,
-            html: buildReceiptHtml(orderForPrint),
+            html: fitThermalReceiptHtml(buildReceiptHtml(orderForPrint)),
             printOptions: {
               margins: { marginType: "none" },
-              pageSize: { width: 76200, height: 2000000 },
+              pageSize: { width: 72000, height: 2000000 },
             },
           });
 
@@ -5541,14 +5552,16 @@ function openAdminVoidsWithPin() {
 
           const kitchenResult = await electronPOS.printKitchen({
             printerName: receiptKitchenPrinter,
-            html: buildKitchenHtml({
-              ...orderForPrint,
-              customer_name: params.customerNameForPrint || "Guest",
-              order_number: params.orderNumber,
-            }).replace("<body>", `<body>${kitchenHeaderHtml}`),
+            html: fitThermalReceiptHtml(
+              buildKitchenHtml({
+                ...orderForPrint,
+                customer_name: params.customerNameForPrint || "Guest",
+                order_number: params.orderNumber,
+              }).replace("<body>", `<body>${kitchenHeaderHtml}`)
+            ),
             printOptions: {
               margins: { marginType: "none" },
-              pageSize: { width: 76200, height: 2000000 },
+              pageSize: { width: 72000, height: 2000000 },
             },
           });
 
