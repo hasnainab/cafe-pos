@@ -692,6 +692,7 @@ function randomLineId() {
 }
 
 const ADMIN_VOID_PIN = "7860";
+const MAX_STICKERS_PER_ORDER = 40;
 
 async function getNextDailyOrderNumber() {
   const now = new Date();
@@ -5223,11 +5224,22 @@ function openAdminVoidsWithPin() {
     }> = [];
 
     cartSnapshot.forEach((item) => {
-      const quantity = Math.max(1, Number(item.quantity || 1));
-      const modifiers = (item.modifiers || []).map((modifier) => modifier.name).filter(Boolean).join(" | ");
-      const itemName = String(item.name || "").trim() || "ITEM";
+      const itemName = String(item.name || "").trim();
+      if (!itemName) return;
+
+      const rawQuantity = Number(item.quantity || 1);
+      const quantity = Number.isFinite(rawQuantity)
+        ? Math.max(1, Math.min(20, Math.floor(rawQuantity)))
+        : 1;
+
+      const modifiers = (item.modifiers || [])
+        .map((modifier) => String(modifier.name || "").trim())
+        .filter(Boolean)
+        .join(" | ");
 
       for (let index = 1; index <= quantity; index += 1) {
+        if (expandedRows.length >= MAX_STICKERS_PER_ORDER) break;
+
         expandedRows.push({
           orderNumber,
           customerName: customerNameForPrint || "Guest",
@@ -5282,6 +5294,7 @@ function openAdminVoidsWithPin() {
     countLabel: string;
   }>) {
     const pages = stickerRows
+      .filter((row) => String(row.drinkName || "").trim())
       .map((row) => {
         const customer = escapeStickerHtml(row.customerName || "Guest");
         const orderNumber = escapeStickerHtml(row.orderNumber || "");
@@ -5314,7 +5327,7 @@ function openAdminVoidsWithPin() {
             @page { size: 2in 1in; margin: 0; }
             html, body {
               width: 2in;
-              height: 1in;
+              max-width: 2in;
               margin: 0;
               padding: 0;
               background: white;
@@ -5322,18 +5335,19 @@ function openAdminVoidsWithPin() {
               font-family: Arial, Helvetica, sans-serif;
               -webkit-print-color-adjust: exact;
               print-color-adjust: exact;
+              overflow: hidden;
             }
             * { box-sizing: border-box; }
             .label {
               width: 2in;
-              height: 1in;
+              height: 0.94in;
+              max-height: 0.94in;
               overflow: hidden;
-              padding: 0.06in 0.07in;
+              margin: 0;
+              padding: 0.055in 0.075in;
               background: white;
               color: black;
-              page-break-after: always;
             }
-            .label:last-child { page-break-after: auto; }
             .top {
               width: 100%;
               display: block;
@@ -5346,16 +5360,16 @@ function openAdminVoidsWithPin() {
             }
             .customer {
               display: inline-block;
-              width: 1.35in;
-              max-width: 1.35in;
+              width: 1.32in;
+              max-width: 1.32in;
               overflow: hidden;
               text-overflow: ellipsis;
               vertical-align: top;
             }
             .count {
               display: inline-block;
-              width: 0.35in;
-              max-width: 0.35in;
+              width: 0.34in;
+              max-width: 0.34in;
               text-align: right;
               vertical-align: top;
             }
@@ -5408,6 +5422,10 @@ function openAdminVoidsWithPin() {
     notes: string;
     countLabel: string;
   }) {
+    if (!String(row.drinkName || "").trim()) {
+      return "<!doctype html><html><body></body></html>";
+    }
+
     return buildSimpleStickerHtml([row]);
   }
 
@@ -5577,12 +5595,25 @@ function openAdminVoidsWithPin() {
           stickerStatus = "No item stickers needed";
         } else {
           try {
-            const normalizedStickerRows = stickerRows.map((row) => ({
-              ...row,
-              orderNumber: params.orderNumber,
-              customerName: params.customerNameForPrint || "Guest",
-              drinkName: String(row.drinkName || "ITEM").trim() || "ITEM",
-            }));
+            const normalizedStickerRows = stickerRows
+              .map((row) => ({
+                ...row,
+                orderNumber: params.orderNumber,
+                customerName: params.customerNameForPrint || "Guest",
+                drinkName: String(row.drinkName || "").trim(),
+              }))
+              .filter((row) => row.drinkName)
+              .slice(0, MAX_STICKERS_PER_ORDER);
+
+            if (normalizedStickerRows.length === 0) {
+              stickerStatus = "No valid sticker items found";
+              return {
+                receiptStatus,
+                kitchenStatus,
+                stickerCount: 0,
+                stickerStatus,
+              };
+            }
 
             let sentCount = 0;
             const failedLabels: string[] = [];
@@ -5816,12 +5847,20 @@ function openAdminVoidsWithPin() {
 
       await waitForPrintQueue(700);
 
-      const normalizedStickerRows = stickerRows.map((row) => ({
-        ...row,
-        orderNumber: order.order_number,
-        customerName: order.customer?.name || "Guest",
-        drinkName: String(row.drinkName || "ITEM").trim() || "ITEM",
-      }));
+      const normalizedStickerRows = stickerRows
+        .map((row) => ({
+          ...row,
+          orderNumber: order.order_number,
+          customerName: order.customer?.name || "Guest",
+          drinkName: String(row.drinkName || "").trim(),
+        }))
+        .filter((row) => row.drinkName)
+        .slice(0, MAX_STICKERS_PER_ORDER);
+
+      if (normalizedStickerRows.length === 0) {
+        setStatusMessage(`No valid stickers found for ${order.order_number}`);
+        return;
+      }
 
       await waitForPrintQueue(1200);
 
