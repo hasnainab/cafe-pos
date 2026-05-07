@@ -687,6 +687,15 @@ function getElapsedSeconds(start: string, end?: string | null) {
   return Math.max(0, Math.floor((endMs - startMs) / 1000));
 }
 
+function isReportableSalesOrder(order: { status?: string | null; collected_at?: string | null; total?: number | string | null }) {
+  const status = String(order.status || "").toLowerCase();
+  if (status === "voided" || status === "cancelled" || status === "canceled") return false;
+  if (status !== "completed" && status !== "collected") return false;
+  if (!order.collected_at) return false;
+  if (Number(order.total || 0) <= 0) return false;
+  return true;
+}
+
 function randomLineId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -2861,15 +2870,18 @@ function openAdminVoidsWithPin() {
       .from("orders")
       .select("*")
       .in("status", ["Completed", "Collected"])
+      .not("collected_at", "is", null)
+      .gt("total", 0)
       .order("collected_at", { ascending: false })
-      .limit(100);
+      .limit(250);
 
     if (error) {
       setStatusMessage(`Could not load completed orders: ${error.message}`);
       return;
     }
 
-    setCompletedOrders(await buildOrdersWithRelations(data || []));
+    const reportableRows = (data || []).filter((row: any) => isReportableSalesOrder(row));
+    setCompletedOrders(await buildOrdersWithRelations(reportableRows));
   }
 
   async function loadReportData() {
@@ -2883,12 +2895,12 @@ function openAdminVoidsWithPin() {
 
     if (error) return;
 
-    const todayRows: any[] = (todayOrderRows || []).filter(
-      (row: any) => String(row.status || "") !== "Voided"
+    const todayRows: any[] = (todayOrderRows || []).filter((row: any) =>
+      isReportableSalesOrder(row)
     );
     setTodayOrders(todayRows.length);
     setTodaySales(todayRows.reduce((sum, row) => sum + Number(row.total || 0), 0));
-    const completedToday = todayRows.filter((row) => row.status === "Collected");
+    const completedToday = todayRows;
     setTodayCompletedOrders(completedToday.length);
 
     const completedWithReady = completedToday.filter((row) => row.ready_at && row.created_at);
@@ -8532,7 +8544,8 @@ function openAdminVoidsWithPin() {
           const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
           const { start: reportStart, end: reportEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
           const reportOrders = completedOrders.filter((order) => {
-            const stamp = order.collected_at || order.ready_at || order.created_at;
+            if (!isReportableSalesOrder(order)) return false;
+            const stamp = order.collected_at;
             if (!stamp) return false;
             const stampDate = new Date(stamp);
             return stampDate >= reportStart && stampDate <= reportEnd;
