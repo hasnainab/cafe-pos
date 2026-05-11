@@ -696,6 +696,96 @@ function isReportableSalesOrder(order: { status?: string | null; collected_at?: 
   return true;
 }
 
+const POS_REPORT_TIMEZONE = "Asia/Karachi";
+const POS_REPORT_UTC_OFFSET_MINUTES = 5 * 60;
+
+function pakistanMidnightUtcFromDateText(dateText: string) {
+  const [year, month, day] = String(dateText || "")
+    .split("-")
+    .map((part) => Number(part));
+
+  if (!year || !month || !day) {
+    const nowPakistanDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: POS_REPORT_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    return pakistanMidnightUtcFromDateText(nowPakistanDate);
+  }
+
+  return new Date(
+    Date.UTC(year, month - 1, day, 0, 0, 0, 0) -
+      POS_REPORT_UTC_OFFSET_MINUTES * 60 * 1000
+  );
+}
+
+function datePartsToText(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function getPakistanReportRange(
+  period: "day" | "week" | "month" | "quarter" | "year",
+  anchorDateText: string
+) {
+  const [year, month, day] = String(anchorDateText || "")
+    .split("-")
+    .map((part) => Number(part));
+
+  const safeYear = year || new Date().getFullYear();
+  const safeMonth = month || new Date().getMonth() + 1;
+  const safeDay = day || new Date().getDate();
+
+  let startLocalText = `${String(safeYear).padStart(4, "0")}-${String(safeMonth).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
+  let endLocalText = datePartsToText(addUtcDays(new Date(Date.UTC(safeYear, safeMonth - 1, safeDay)), 1));
+
+  if (period === "week") {
+    const anchorNoon = new Date(Date.UTC(safeYear, safeMonth - 1, safeDay, 12, 0, 0));
+    const dow = anchorNoon.getUTCDay();
+    const mondayOffset = dow === 0 ? -6 : 1 - dow;
+    const startNoon = addUtcDays(anchorNoon, mondayOffset);
+    const endNoon = addUtcDays(startNoon, 7);
+    startLocalText = datePartsToText(startNoon);
+    endLocalText = datePartsToText(endNoon);
+  }
+
+  if (period === "month") {
+    startLocalText = `${String(safeYear).padStart(4, "0")}-${String(safeMonth).padStart(2, "0")}-01`;
+    const endNoon = new Date(Date.UTC(safeYear, safeMonth, 1, 12, 0, 0));
+    endLocalText = datePartsToText(endNoon);
+  }
+
+  if (period === "quarter") {
+    const quarterStartMonth = Math.floor((safeMonth - 1) / 3) * 3 + 1;
+    startLocalText = `${String(safeYear).padStart(4, "0")}-${String(quarterStartMonth).padStart(2, "0")}-01`;
+    const endNoon = new Date(Date.UTC(safeYear, quarterStartMonth - 1 + 3, 1, 12, 0, 0));
+    endLocalText = datePartsToText(endNoon);
+  }
+
+  if (period === "year") {
+    startLocalText = `${String(safeYear).padStart(4, "0")}-01-01`;
+    endLocalText = `${String(safeYear + 1).padStart(4, "0")}-01-01`;
+  }
+
+  const start = pakistanMidnightUtcFromDateText(startLocalText);
+  const endExclusive = pakistanMidnightUtcFromDateText(endLocalText);
+  const end = new Date(endExclusive.getTime() - 1);
+  const endLabelDate = addUtcDays(new Date(`${endLocalText}T00:00:00Z`), -1);
+
+  return {
+    start,
+    end,
+    startLabel: new Date(`${startLocalText}T00:00:00`).toLocaleDateString(),
+    endLabel: endLabelDate.toLocaleDateString(),
+  };
+}
+
 function randomLineId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -2885,13 +2975,20 @@ function openAdminVoidsWithPin() {
   }
 
   async function loadReportData() {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const pakistanToday = new Intl.DateTimeFormat("en-CA", {
+      timeZone: POS_REPORT_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    const { start: startOfDay, end: endOfDay } = getPakistanReportRange("day", pakistanToday);
 
     const { data: todayOrderRows, error } = await supabase
       .from("orders")
       .select("*")
-      .gte("created_at", startOfDay.toISOString());
+      .gte("collected_at", startOfDay.toISOString())
+      .lte("collected_at", endOfDay.toISOString());
 
     if (error) return;
 
@@ -8541,8 +8638,8 @@ function openAdminVoidsWithPin() {
         })()}
 
         {viewMode === "reports" && canViewReports && (() => {
-          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
-          const { start: reportStart, end: reportEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
+          const { start: reportStart, end: reportEnd, startLabel: reportStartLabel, endLabel: reportEndLabel } =
+            getPakistanReportRange(profitabilityPeriod, reportAnchorDate);
           const reportOrders = completedOrders.filter((order) => {
             if (!isReportableSalesOrder(order)) return false;
             const stamp = order.collected_at;
@@ -8707,7 +8804,7 @@ function openAdminVoidsWithPin() {
                 </div>
 
                 <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700/80">
-                  Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStart.toLocaleDateString()}</span> to <span className="font-semibold">{reportEnd.toLocaleDateString()}</span>
+                  Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
@@ -9154,8 +9251,8 @@ function openAdminVoidsWithPin() {
         })()}
 
         {viewMode === "reorder" && canViewReports && (() => {
-          const anchorDate = reportAnchorDate ? new Date(`${reportAnchorDate}T12:00:00`) : new Date();
-          const { start: reportStart, end: reportEnd } = getPeriodRange(profitabilityPeriod, anchorDate);
+          const { start: reportStart, end: reportEnd, startLabel: reportStartLabel, endLabel: reportEndLabel } =
+            getPakistanReportRange(profitabilityPeriod, reportAnchorDate);
           const reportOrderIds = new Set(
             completedOrders
               .filter((order) => {
@@ -9241,7 +9338,7 @@ function openAdminVoidsWithPin() {
                       ))}
                     </div>
                     <div className="text-xs text-rose-700/70">
-                      Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStart.toLocaleDateString()}</span> to <span className="font-semibold">{reportEnd.toLocaleDateString()}</span>
+                      Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
                     </div>
                   </div>
                 </div>
