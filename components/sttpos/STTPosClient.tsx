@@ -688,11 +688,13 @@ function getElapsedSeconds(start: string, end?: string | null) {
 }
 
 function isReportableSalesOrder(order: { status?: string | null; collected_at?: string | null; total?: number | string | null }) {
-  const status = String(order.status || "").toLowerCase();
+  const status = String(order.status || "").trim().toLowerCase();
+
   if (status === "voided" || status === "cancelled" || status === "canceled") return false;
   if (status !== "completed" && status !== "collected") return false;
   if (!order.collected_at) return false;
   if (Number(order.total || 0) <= 0) return false;
+
   return true;
 }
 
@@ -8652,7 +8654,11 @@ function openAdminVoidsWithPin() {
             getPakistanReportRange(profitabilityPeriod, reportAnchorDate);
           const reportOrders = completedOrders.filter((order) => {
             if (!isReportableSalesOrder(order)) return false;
-            const stamp = order.collected_at;
+            if (!Array.isArray(order.items) || order.items.length === 0) return false;
+
+            // Management Reports should follow the business day the order was placed on.
+            // This prevents late-collected older orders from inflating today's order count and Payment Mix.
+            const stamp = order.created_at;
             if (!stamp) return false;
             const stampDate = new Date(stamp);
             return stampDate >= reportStart && stampDate <= reportEnd;
@@ -8814,7 +8820,15 @@ function openAdminVoidsWithPin() {
                 </div>
 
                 <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700/80">
-                  Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
+                  {profitabilityPeriod === "day" ? (
+                    <>
+                      Showing day view for <span className="font-semibold">{reportStartLabel}</span>
+                    </>
+                  ) : (
+                    <>
+                      Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
+                    </>
+                  )}
                   <div className="mt-1 text-xs text-rose-700/70">
                     Pakistan business time: 12:00 AM to 11:59 PM Asia/Karachi. This report counts collected sales only.
                   </div>
@@ -8822,7 +8836,7 @@ function openAdminVoidsWithPin() {
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
                   {[
-                    ["Completed Sales", String(reportOrders.length)],
+                    ["Orders", String(reportOrders.length)],
                     ["Net Sales", formatCurrency(reportNetSalesTotal)],
                     ["Gross Billed", formatCurrency(reportGrossBilledTotal)],
                     ["Avg Order Value", formatCurrency(reportAverageOrderValue)],
