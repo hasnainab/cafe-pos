@@ -724,6 +724,16 @@ function datePartsToText(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
+function formatReportDateText(dateText: string) {
+  const [year, month, day] = String(dateText || "")
+    .split("-")
+    .map((part) => Number(part));
+
+  if (!year || !month || !day) return dateText || "";
+
+  return `${month}/${day}/${year}`;
+}
+
 function addUtcDays(date: Date, days: number) {
   const next = new Date(date);
   next.setUTCDate(next.getUTCDate() + days);
@@ -776,13 +786,13 @@ function getPakistanReportRange(
   const start = pakistanMidnightUtcFromDateText(startLocalText);
   const endExclusive = pakistanMidnightUtcFromDateText(endLocalText);
   const end = new Date(endExclusive.getTime() - 1);
-  const endLabelDate = addUtcDays(new Date(`${endLocalText}T00:00:00Z`), -1);
+  const endLabelText = datePartsToText(addUtcDays(new Date(`${endLocalText}T00:00:00Z`), -1));
 
   return {
     start,
     end,
-    startLabel: new Date(`${startLocalText}T00:00:00`).toLocaleDateString(),
-    endLabel: endLabelDate.toLocaleDateString(),
+    startLabel: formatReportDateText(startLocalText),
+    endLabel: formatReportDateText(endLabelText),
   };
 }
 
@@ -8805,11 +8815,14 @@ function openAdminVoidsWithPin() {
 
                 <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700/80">
                   Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
+                  <div className="mt-1 text-xs text-rose-700/70">
+                    Pakistan business time: 12:00 AM to 11:59 PM Asia/Karachi. This report counts collected sales only.
+                  </div>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
                   {[
-                    ["Orders", String(reportOrders.length)],
+                    ["Completed Sales", String(reportOrders.length)],
                     ["Net Sales", formatCurrency(reportNetSalesTotal)],
                     ["Gross Billed", formatCurrency(reportGrossBilledTotal)],
                     ["Avg Order Value", formatCurrency(reportAverageOrderValue)],
@@ -8828,6 +8841,53 @@ function openAdminVoidsWithPin() {
                       <div className="mt-1 text-lg font-semibold">{value}</div>
                     </div>
                   ))}
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-rose-100 bg-white p-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-base font-semibold text-rose-950">Orders Counted in This Report</h3>
+                      <p className="text-xs text-rose-700/70">
+                        This list is the source of the Completed Sales number above.
+                      </p>
+                    </div>
+                    <div className="text-xs font-semibold text-rose-700">
+                      {reportOrders.length} order{reportOrders.length === 1 ? "" : "s"}
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-rose-700/70">
+                          <th className="px-3 py-2">Order</th>
+                          <th className="px-3 py-2">Collected</th>
+                          <th className="px-3 py-2">Customer</th>
+                          <th className="px-3 py-2">Payment</th>
+                          <th className="px-3 py-2 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportOrders.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-3 text-rose-700/60" colSpan={5}>
+                              No completed sales found for this Pakistan-time period.
+                            </td>
+                          </tr>
+                        ) : (
+                          reportOrders.map((order) => (
+                            <tr key={`report-order-${order.id}`} className="border-b last:border-b-0">
+                              <td className="px-3 py-2 font-semibold text-rose-950">{order.order_number}</td>
+                              <td className="px-3 py-2 text-rose-700/80">{order.collected_at ? formatDateTime(order.collected_at) : "-"}</td>
+                              <td className="px-3 py-2 text-rose-700/80">{order.customer?.name || "Guest"}</td>
+                              <td className="px-3 py-2 text-rose-700/80">{order.payment_method_name || "-"}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-rose-950">{formatCurrency(Number(order.total || 0))}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </section>
 
