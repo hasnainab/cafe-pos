@@ -135,7 +135,44 @@ type CustomerSummary = {
   total_points_redeemed: number;
 };
 
-type ViewMode = "pos" | "active" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing" | "voids";
+
+type CustomerTab = {
+  id: number;
+  tab_number: string;
+  customer_id: number | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  table_name: string | null;
+  guest_count: number;
+  status: string;
+  opened_at: string;
+  closed_at: string | null;
+  subtotal: number;
+  tax_total: number;
+  discount_total: number;
+  total: number;
+  paid_total: number;
+  balance_due: number;
+  payment_method_id: number | null;
+  final_order_id: number | null;
+  notes: string | null;
+};
+
+type CustomerTabItem = {
+  id: number;
+  tab_id: number;
+  round_number: number;
+  product_id: number | null;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+  modifiers_text: string | null;
+  notes: string | null;
+  added_at: string;
+};
+
+type ViewMode = "pos" | "active" | "tabs" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing" | "voids";
 
 type ProductForm = {
   id: number | null;
@@ -688,13 +725,11 @@ function getElapsedSeconds(start: string, end?: string | null) {
 }
 
 function isReportableSalesOrder(order: { status?: string | null; collected_at?: string | null; total?: number | string | null }) {
-  const status = String(order.status || "").trim().toLowerCase();
-
+  const status = String(order.status || "").toLowerCase();
   if (status === "voided" || status === "cancelled" || status === "canceled") return false;
   if (status !== "completed" && status !== "collected") return false;
   if (!order.collected_at) return false;
   if (Number(order.total || 0) <= 0) return false;
-
   return true;
 }
 
@@ -1264,6 +1299,13 @@ function openAdminVoidsWithPin() {
   const [campaignMessage, setCampaignMessage] = useState("Assalam o Alaikum. We would love to welcome you back to Spill The Tea. Visit us soon for your next favorite cup.");
   const [selectedCampaignCustomerIds, setSelectedCampaignCustomerIds] = useState<number[]>([]);
   const [customerList, setCustomerList] = useState<CustomerSummary[]>([]);
+  const [customerTabs, setCustomerTabs] = useState<CustomerTab[]>([]);
+  const [customerTabItems, setCustomerTabItems] = useState<CustomerTabItem[]>([]);
+  const [selectedCustomerTabId, setSelectedCustomerTabId] = useState<number | null>(null);
+  const [tabTableName, setTabTableName] = useState("");
+  const [tabGuestCount, setTabGuestCount] = useState("1");
+  const [tabNotes, setTabNotes] = useState("");
+  const [tabClosingId, setTabClosingId] = useState<number | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [selectedCustomerSummary, setSelectedCustomerSummary] = useState<CustomerSummary | null>(null);
   const [selectedCustomerOrders, setSelectedCustomerOrders] = useState<OrderView[]>([]);
@@ -2213,6 +2255,39 @@ function openAdminVoidsWithPin() {
   const cashReceived = Math.max(0, Number(cashReceivedInput || 0));
   const cashChange = Math.max(0, cashReceived - cartGrandTotal);
 
+  function calculateTaxesForAmount(amount: number) {
+    return selectedPaymentTaxes.reduce((sum, tax) => {
+      return sum + (Number(amount || 0) * Number(tax.rate_percent || 0)) / 100;
+    }, 0);
+  }
+
+  function getCartItemUnitPrice(item: CartItem) {
+    const modifierTotal = item.modifiers.reduce(
+      (modSum, mod) => modSum + Number(mod.price_delta || 0),
+      0
+    );
+    const normalUnit = Number(item.base_price || 0) + modifierTotal;
+    if (item.pricing_mode === "complimentary") return 0;
+    if (item.pricing_mode === "discounted") return Math.max(0, Number(item.discounted_unit_price || 0));
+    return normalUnit;
+  }
+
+  function getTabItems(tabId: number) {
+    return customerTabItems.filter((item) => Number(item.tab_id) === Number(tabId));
+  }
+
+  function getTabSubtotal(tabId: number) {
+    return getTabItems(tabId).reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+  }
+
+  function getTabTaxTotal(tabId: number) {
+    return calculateTaxesForAmount(getTabSubtotal(tabId));
+  }
+
+  function getTabGrandTotal(tabId: number) {
+    return getTabSubtotal(tabId) + getTabTaxTotal(tabId);
+  }
+
   const currentRewardRate = useMemo(() => {
     if (!currentCustomer) return 5;
     return getEffectiveRewardRate(
@@ -2901,6 +2976,7 @@ function openAdminVoidsWithPin() {
         const orderId = Number(item.order_id);
         const current = itemsMap.get(orderId) || [];
         current.push({
+          product_id: item.product_id === null || item.product_id === undefined ? null : Number(item.product_id),
           product_name: String(item.product_name),
           quantity: Number(item.quantity),
           unit_price: Number(item.unit_price),
@@ -2999,8 +3075,8 @@ function openAdminVoidsWithPin() {
     const { data: todayOrderRows, error } = await supabase
       .from("orders")
       .select("*")
-      .gte("collected_at", startOfDay.toISOString())
-      .lte("collected_at", endOfDay.toISOString());
+      .gte("created_at", startOfDay.toISOString())
+      .lte("created_at", endOfDay.toISOString());
 
     if (error) return;
 
@@ -4144,6 +4220,418 @@ function openAdminVoidsWithPin() {
     })));
   }
 
+
+  async function loadCustomerTabs() {
+    try {
+      const { data: tabsData, error: tabsError } = await supabase
+        .from("customer_tabs")
+        .select("*")
+        .in("status", ["open", "closing"])
+        .order("opened_at", { ascending: false });
+
+      if (tabsError) {
+        setCustomerTabs([]);
+        setCustomerTabItems([]);
+        return;
+      }
+
+      const tabs: CustomerTab[] = ((tabsData || []) as any[]).map((row: any) => ({
+        id: Number(row.id),
+        tab_number: String(row.tab_number || `TAB-${row.id}`),
+        customer_id: row.customer_id == null ? null : Number(row.customer_id),
+        customer_name: row.customer_name ?? null,
+        customer_phone: row.customer_phone ?? null,
+        table_name: row.table_name ?? null,
+        guest_count: Number(row.guest_count || 1),
+        status: String(row.status || "open"),
+        opened_at: String(row.opened_at),
+        closed_at: row.closed_at ?? null,
+        subtotal: Number(row.subtotal || 0),
+        tax_total: Number(row.tax_total || 0),
+        discount_total: Number(row.discount_total || 0),
+        total: Number(row.total || 0),
+        paid_total: Number(row.paid_total || 0),
+        balance_due: Number(row.balance_due || 0),
+        payment_method_id: row.payment_method_id == null ? null : Number(row.payment_method_id),
+        final_order_id: row.final_order_id == null ? null : Number(row.final_order_id),
+        notes: row.notes ?? null,
+      }));
+
+      setCustomerTabs(tabs);
+
+      const tabIds = tabs.map((tab) => tab.id);
+      if (tabIds.length === 0) {
+        setCustomerTabItems([]);
+        return;
+      }
+
+      const { data: itemsData, error: itemsError } = await supabase
+        .from("customer_tab_items")
+        .select("*")
+        .in("tab_id", tabIds)
+        .order("added_at", { ascending: true });
+
+      if (itemsError) {
+        setCustomerTabItems([]);
+        return;
+      }
+
+      setCustomerTabItems(((itemsData || []) as any[]).map((row: any) => ({
+        id: Number(row.id),
+        tab_id: Number(row.tab_id),
+        round_number: Number(row.round_number || 1),
+        product_id: row.product_id == null ? null : Number(row.product_id),
+        product_name: String(row.product_name || "Item"),
+        quantity: Number(row.quantity || 0),
+        unit_price: Number(row.unit_price || 0),
+        line_total: Number(row.line_total || 0),
+        modifiers_text: row.modifiers_text ?? null,
+        notes: row.notes ?? null,
+        added_at: String(row.added_at || row.created_at || new Date().toISOString()),
+      })));
+    } catch (error) {
+      console.warn("Customer tabs skipped", error);
+    }
+  }
+
+  function getNextTabNumber() {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const count = customerTabs.filter((tab) => String(tab.tab_number || "").startsWith(`TAB-${dd}-`)).length + 1;
+    return `TAB-${dd}-${String(count).padStart(3, "0")}`;
+  }
+
+  function buildTabRoundCartSnapshot(tabItems: CustomerTabItem[], tab: CustomerTab): CartItem[] {
+    return tabItems.map((item, index) => ({
+      line_id: `tab-${tab.id}-${item.id}-${index}`,
+      product_id: Number(item.product_id || 0),
+      name: String(item.product_name || "Item"),
+      base_price: Number(item.unit_price || 0),
+      quantity: Math.max(1, Number(item.quantity || 1)),
+      modifiers: String(item.modifiers_text || "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .map((name, modifierIndex) => ({
+          id: Number(`${tab.id}${item.id}${modifierIndex}`.slice(0, 9)) || modifierIndex,
+          name,
+          price_delta: 0,
+          active: true,
+        })),
+      notes: item.notes || "",
+      pricing_mode: "normal",
+      discounted_unit_price: null,
+    }));
+  }
+
+  async function printTabRoundArtifacts(tab: CustomerTab, roundItems: CustomerTabItem[]) {
+    const electronPOS = (window as any).electronPOS;
+    if (!electronPOS) return "Printer bridge not available";
+
+    const customerNameForPrint = tab.customer_name || tab.table_name || "Guest Tab";
+    const cartSnapshot = buildTabRoundCartSnapshot(roundItems, tab);
+    const orderForPrint = {
+      order_number: tab.tab_number,
+      created_at: new Date().toISOString(),
+      customer_name: customerNameForPrint,
+      payment_method_name: "Open Tab",
+      subtotal: roundItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0),
+      discount_total: 0,
+      tax_total: 0,
+      total: roundItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0),
+      logo_data_url: null,
+      business_name: "Spill The Tea",
+      business_tagline: "Open Customer Tab",
+      business_phone: null,
+      business_address: null,
+      items: roundItems.map((item) => ({
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        line_total: item.line_total,
+        modifiers_text: item.modifiers_text,
+        notes: item.notes,
+        product_type: "drink",
+      })),
+    };
+
+    const statuses: string[] = [];
+
+    if (autoPrintKitchen && receiptKitchenPrinter) {
+      try {
+        const kitchenResult = await electronPOS.printKitchen({
+          printerName: receiptKitchenPrinter,
+          html: fitThermalReceiptHtml(buildKitchenHtml(orderForPrint)),
+          printOptions: {
+            margins: { marginType: "none" },
+            pageSize: { width: 72000, height: 2000000 },
+          },
+        });
+        statuses.push(kitchenResult?.ok === false ? `Kitchen failed: ${kitchenResult?.error || "Unknown"}` : "Kitchen sent");
+      } catch (error) {
+        statuses.push(error instanceof Error ? `Kitchen failed: ${error.message}` : "Kitchen failed");
+      }
+    }
+
+    if (autoPrintStickers && stickerPrinter) {
+      try {
+        const stickerRows = buildStickerRowsFromCartSnapshot({
+          cartSnapshot,
+          orderNumber: tab.tab_number,
+          customerNameForPrint,
+        });
+        let sentCount = 0;
+        for (const row of stickerRows.slice(0, MAX_STICKERS_PER_ORDER)) {
+          const stickerResult = await electronPOS.printStickers({
+            printerName: stickerPrinter,
+            html: buildSingleStickerHtml(row),
+            printOptions: {
+              silent: true,
+              printBackground: true,
+              margins: { marginType: "none" },
+              pageSize: { width: 50800, height: 25400 },
+            },
+          });
+          if (stickerResult?.ok !== false) sentCount += 1;
+          await waitForPrintQueue(1200);
+        }
+        statuses.push(`${sentCount} sticker(s) sent`);
+      } catch (error) {
+        statuses.push(error instanceof Error ? `Stickers failed: ${error.message}` : "Stickers failed");
+      }
+    }
+
+    return statuses.length > 0 ? statuses.join(" | ") : "Tab saved, auto print is off";
+  }
+
+  async function createCustomerTabFromCart() {
+    if (cart.length === 0) {
+      setStatusMessage("Add items to the cart before opening a customer tab");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const customer = customerPhone.trim() ? await ensureCustomer() : null;
+      const tabPayload = {
+        tab_number: getNextTabNumber(),
+        customer_id: customer?.id ?? null,
+        customer_name: customer?.name || customerName || "Guest",
+        customer_phone: customer?.phone || customerPhone || null,
+        table_name: tabTableName.trim() || null,
+        guest_count: Math.max(1, Number(tabGuestCount || 1)),
+        status: "open",
+        opened_at: new Date().toISOString(),
+        notes: tabNotes.trim() || null,
+      };
+
+      const { data: tabRow, error: tabError } = await supabase
+        .from("customer_tabs")
+        .insert(tabPayload)
+        .select("*")
+        .single();
+
+      if (tabError) throw new Error(`Could not open tab: ${tabError.message}`);
+
+      await addCartItemsToTab(Number(tabRow.id), true);
+      setSelectedCustomerTabId(Number(tabRow.id));
+      setTabTableName("");
+      setTabGuestCount("1");
+      setTabNotes("");
+      setViewMode("tabs");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not open tab");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addCartItemsToTab(tabId?: number, isNewTab = false) {
+    const targetTabId = tabId ?? selectedCustomerTabId;
+    if (!targetTabId) {
+      setStatusMessage("Select an open customer tab first");
+      return;
+    }
+    if (cart.length === 0) {
+      setStatusMessage("Add items to the cart first");
+      return;
+    }
+
+    const tab = customerTabs.find((row) => Number(row.id) === Number(targetTabId));
+    const roundNumber =
+      Math.max(0, ...customerTabItems.filter((item) => Number(item.tab_id) === Number(targetTabId)).map((item) => Number(item.round_number || 0))) + 1;
+
+    const itemPayload = cart.map((item) => {
+      const unit = getCartItemUnitPrice(item);
+      return {
+        tab_id: targetTabId,
+        round_number: roundNumber,
+        product_id: item.product_id,
+        product_name: item.name,
+        quantity: item.quantity,
+        unit_price: unit,
+        line_total: unit * item.quantity,
+        modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
+        notes: item.notes || null,
+        added_at: new Date().toISOString(),
+        added_by: staffProfile?.id || null,
+      };
+    });
+
+    const { data: insertedItems, error: itemsError } = await supabase
+      .from("customer_tab_items")
+      .insert(itemPayload)
+      .select("*");
+
+    if (itemsError) {
+      setStatusMessage(`Could not add items to tab: ${itemsError.message}`);
+      return;
+    }
+
+    const tabForPrint = tab || {
+      id: Number(targetTabId),
+      tab_number: `TAB-${targetTabId}`,
+      customer_name: customerName || "Guest",
+      customer_phone: customerPhone || null,
+      table_name: tabTableName || null,
+    } as CustomerTab;
+
+    const printMessage = await printTabRoundArtifacts(
+      tabForPrint,
+      ((insertedItems || []) as any[]).map((row: any) => ({
+        id: Number(row.id),
+        tab_id: Number(row.tab_id),
+        round_number: Number(row.round_number || roundNumber),
+        product_id: row.product_id == null ? null : Number(row.product_id),
+        product_name: String(row.product_name || "Item"),
+        quantity: Number(row.quantity || 0),
+        unit_price: Number(row.unit_price || 0),
+        line_total: Number(row.line_total || 0),
+        modifiers_text: row.modifiers_text ?? null,
+        notes: row.notes ?? null,
+        added_at: String(row.added_at || new Date().toISOString()),
+      }))
+    );
+
+    setCart([]);
+    resetLineBuilder();
+    setStatusMessage(`${isNewTab ? "Customer tab opened" : "Items added to tab"} | ${printMessage}`);
+    await loadCustomerTabs();
+  }
+
+  async function closeCustomerTab(tab: CustomerTab) {
+    if (!selectedPaymentMethodId) {
+      setStatusMessage("Select a payment method before closing the tab");
+      return;
+    }
+
+    const tabItems = getTabItems(tab.id);
+    if (tabItems.length === 0) {
+      setStatusMessage("This tab has no items");
+      return;
+    }
+
+    setTabClosingId(tab.id);
+    try {
+      const subtotal = getTabSubtotal(tab.id);
+      const taxTotal = getTabTaxTotal(tab.id);
+      const total = subtotal + taxTotal;
+      const orderNumber = await getNextDailyOrderNumber();
+      const completedAt = new Date().toISOString();
+
+      const { data: orderRow, error: orderError } = await supabase
+        .from("orders")
+        .insert({
+          order_number: orderNumber,
+          status: "Completed",
+          total,
+          subtotal,
+          tax_total: taxTotal,
+          discount_total: 0,
+          points_earned: 0,
+          points_redeemed: 0,
+          eligible_subtotal: subtotal,
+          non_eligible_subtotal: 0,
+          effective_reward_percent: 0,
+          reward_multiplier: 1,
+          customer_id: tab.customer_id ?? null,
+          payment_method_id: selectedPaymentMethodId,
+          created_at: tab.opened_at || completedAt,
+          ready_at: completedAt,
+          collected_at: completedAt,
+        })
+        .select("*")
+        .single();
+
+      if (orderError) throw new Error(`Could not create final bill: ${orderError.message}`);
+
+      const orderItemsPayload = tabItems.map((item) => ({
+        order_id: Number(orderRow.id),
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        line_total: item.line_total,
+        modifiers_text: item.modifiers_text,
+        notes: item.notes,
+      }));
+
+      const { error: orderItemsError } = await supabase.from("order_items").insert(orderItemsPayload);
+      if (orderItemsError) throw new Error(`Could not save final bill items: ${orderItemsError.message}`);
+
+      const { error: closeError } = await supabase
+        .from("customer_tabs")
+        .update({
+          status: "closed",
+          closed_at: completedAt,
+          closed_by: staffProfile?.id || null,
+          subtotal,
+          tax_total: taxTotal,
+          discount_total: 0,
+          total,
+          paid_total: total,
+          balance_due: 0,
+          payment_method_id: selectedPaymentMethodId,
+          final_order_id: Number(orderRow.id),
+        })
+        .eq("id", tab.id);
+
+      if (closeError) throw new Error(`Could not close tab: ${closeError.message}`);
+
+      await recordAuditLog("customer_tab_closed", "customer_tab", tab.id, {
+        tab_number: tab.tab_number,
+        order_number: orderNumber,
+        total,
+      });
+
+      setSelectedCustomerTabId(null);
+      setStatusMessage(`Tab ${tab.tab_number} closed and final bill ${orderNumber} created for ${formatCurrency(total)}`);
+      await refreshAll();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not close customer tab");
+    } finally {
+      setTabClosingId(null);
+    }
+  }
+
+  async function voidCustomerTab(tab: CustomerTab) {
+    const confirmed = window.confirm(`Cancel open tab ${tab.tab_number}? This will not create a final bill.`);
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("customer_tabs")
+      .update({ status: "voided", closed_at: new Date().toISOString(), closed_by: staffProfile?.id || null })
+      .eq("id", tab.id);
+
+    if (error) {
+      setStatusMessage(`Could not cancel tab: ${error.message}`);
+      return;
+    }
+
+    setStatusMessage(`Tab ${tab.tab_number} cancelled`);
+    await loadCustomerTabs();
+  }
+
   const refreshAll = useCallback(async () => {
     setStatusMessage("Refreshing...");
     await loadCategories();
@@ -4157,6 +4645,7 @@ function openAdminVoidsWithPin() {
     await loadCompletedOrders();
     await loadReportData();
     await loadCustomerList();
+    await loadCustomerTabs();
     await loadVendors();
     await loadInventoryItemCategories();
     await loadInventoryItems();
@@ -7530,6 +8019,7 @@ function openAdminVoidsWithPin() {
               <div className="flex flex-wrap items-center gap-2">
                 {navButton("pos", "POS")}
                 {navButton("active", "Active")}
+                {navButton("tabs", "Customer Tabs")}
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
                 {canViewInventory ? navButton("audit", "Stock Audit") : null}
                 {navButton("history", "History")}
@@ -8123,6 +8613,62 @@ function openAdminVoidsWithPin() {
                     >
                       {saving ? "Saving..." : "Create Order"}
                     </button>
+
+                    <div className="rounded-2xl border border-pink-200 bg-pink-50 p-3">
+                      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-pink-700">Customer Open Tab</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          value={tabTableName}
+                          onChange={(e) => setTabTableName(e.target.value)}
+                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          placeholder="Table / area"
+                        />
+                        <input
+                          value={tabGuestCount}
+                          onChange={(e) => setTabGuestCount(e.target.value)}
+                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          placeholder="Guests"
+                        />
+                      </div>
+                      <input
+                        value={tabNotes}
+                        onChange={(e) => setTabNotes(e.target.value)}
+                        className="mt-2 w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                        placeholder="Optional tab note"
+                      />
+                      <button
+                        type="button"
+                        onClick={createCustomerTabFromCart}
+                        disabled={saving || cart.length === 0}
+                        className="mt-2 w-full rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
+                      >
+                        Open Tab With Current Cart
+                      </button>
+                      {customerTabs.length > 0 ? (
+                        <div className="mt-2 grid gap-2">
+                          <select
+                            value={selectedCustomerTabId ?? ""}
+                            onChange={(e) => setSelectedCustomerTabId(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          >
+                            <option value="">Select existing open tab</option>
+                            {customerTabs.map((tab) => (
+                              <option key={tab.id} value={tab.id}>
+                                {tab.tab_number} - {tab.customer_name || tab.table_name || "Guest"} - {formatCurrency(getTabGrandTotal(tab.id))}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => addCartItemsToTab()}
+                            disabled={saving || cart.length === 0 || !selectedCustomerTabId}
+                            className="w-full rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 disabled:opacity-50"
+                          >
+                            Add Current Cart To Selected Tab
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </section>
               </section>
@@ -8143,6 +8689,133 @@ function openAdminVoidsWithPin() {
                 <p className="text-rose-700/70">No preparing orders.</p>
               ) : (
                 preparingOrders.map((order) => renderOrderCard(order))
+              )}
+            </div>
+          </section>
+        )}
+
+
+        {viewMode === "tabs" && (
+          <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-500">Running Bills</p>
+                <h2 className="mt-1 text-2xl font-semibold text-rose-950">Customer Open Tabs</h2>
+                <p className="mt-1 max-w-3xl text-sm text-rose-700/70">
+                  Use tabs for customers who keep ordering during their visit. Add rounds over time, then close and collect one final bill when they leave.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadCustomerTabs}
+                className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+              >
+                Refresh Tabs
+              </button>
+            </div>
+
+            <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="mb-2 text-sm font-bold text-amber-900">Payment method for closing tabs</div>
+              <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-5">
+                {paymentMethods.filter((method) => method.active !== false).map((method) => {
+                  const selected = selectedPaymentMethodId === method.id;
+                  return (
+                    <button
+                      key={`tab-pay-${method.id}`}
+                      type="button"
+                      onClick={() => setSelectedPaymentMethodId(method.id)}
+                      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+                        selected ? "border-emerald-500 bg-emerald-500 text-white" : "border-amber-200 bg-white text-amber-900"
+                      }`}
+                    >
+                      {method.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {customerTabs.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 p-6 text-sm text-rose-700/70">
+                  No open customer tabs. Build a cart in POS, then click Open Tab With Current Cart.
+                </div>
+              ) : (
+                customerTabs.map((tab) => {
+                  const tabItems = getTabItems(tab.id);
+                  const subtotal = getTabSubtotal(tab.id);
+                  const taxTotal = getTabTaxTotal(tab.id);
+                  const grandTotal = getTabGrandTotal(tab.id);
+                  const roundNumbers = Array.from(new Set(tabItems.map((item) => item.round_number))).sort((a, b) => a - b);
+
+                  return (
+                    <div key={tab.id} className="rounded-3xl border border-pink-200 bg-white p-4 shadow-sm">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-xl font-bold text-rose-950">{tab.tab_number}</h3>
+                            <span className="rounded-full bg-pink-100 px-3 py-1 text-xs font-semibold text-pink-700">Open</span>
+                          </div>
+                          <div className="mt-1 text-sm text-rose-700/70">
+                            {tab.customer_name || "Guest"} {tab.table_name ? `- ${tab.table_name}` : ""} - opened {formatTime(tab.opened_at)}
+                          </div>
+                          {tab.notes ? <div className="mt-1 text-xs text-rose-600">Note: {tab.notes}</div> : null}
+                        </div>
+                        <div className="min-w-[220px] rounded-2xl bg-rose-50 p-3 text-sm">
+                          <div className="flex justify-between"><span>Subtotal</span><strong>{formatCurrency(subtotal)}</strong></div>
+                          <div className="flex justify-between"><span>Tax</span><strong>{formatCurrency(taxTotal)}</strong></div>
+                          <div className="mt-2 flex justify-between border-t border-rose-200 pt-2 text-base"><span>Total</span><strong>{formatCurrency(grandTotal)}</strong></div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {roundNumbers.map((round) => (
+                          <div key={`${tab.id}-round-${round}`} className="rounded-2xl border border-rose-100 bg-rose-50 p-3">
+                            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-500">Round {round}</div>
+                            <div className="space-y-2">
+                              {tabItems.filter((item) => item.round_number === round).map((item) => (
+                                <div key={item.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
+                                  <div>
+                                    <strong>{item.product_name} x {item.quantity}</strong>
+                                    <div className="text-xs text-rose-700/60">
+                                      {item.modifiers_text ? `Mods: ${item.modifiers_text}` : ""} {item.notes ? `Note: ${item.notes}` : ""}
+                                    </div>
+                                  </div>
+                                  <strong>{formatCurrency(item.line_total)}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedCustomerTabId(tab.id); setViewMode("pos"); }}
+                          className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-50"
+                        >
+                          Add More Items
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => closeCustomerTab(tab)}
+                          disabled={tabClosingId === tab.id}
+                          className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          {tabClosingId === tab.id ? "Closing..." : "Close & Pay Final Bill"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => voidCustomerTab(tab)}
+                          className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          Cancel Tab
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>
@@ -8654,11 +9327,7 @@ function openAdminVoidsWithPin() {
             getPakistanReportRange(profitabilityPeriod, reportAnchorDate);
           const reportOrders = completedOrders.filter((order) => {
             if (!isReportableSalesOrder(order)) return false;
-            if (!Array.isArray(order.items) || order.items.length === 0) return false;
-
-            // Management Reports should follow the business day the order was placed on.
-            // This prevents late-collected older orders from inflating today's order count and Payment Mix.
-            const stamp = order.created_at;
+            const stamp = order.collected_at;
             if (!stamp) return false;
             const stampDate = new Date(stamp);
             return stampDate >= reportStart && stampDate <= reportEnd;
@@ -8820,15 +9489,7 @@ function openAdminVoidsWithPin() {
                 </div>
 
                 <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700/80">
-                  {profitabilityPeriod === "day" ? (
-                    <>
-                      Showing day view for <span className="font-semibold">{reportStartLabel}</span>
-                    </>
-                  ) : (
-                    <>
-                      Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
-                    </>
-                  )}
+                  Showing {profitabilityPeriod} view for <span className="font-semibold">{reportStartLabel}</span> to <span className="font-semibold">{reportEndLabel}</span>
                   <div className="mt-1 text-xs text-rose-700/70">
                     Pakistan business time: 12:00 AM to 11:59 PM Asia/Karachi. This report counts collected sales only.
                   </div>
@@ -8836,7 +9497,7 @@ function openAdminVoidsWithPin() {
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
                   {[
-                    ["Orders", String(reportOrders.length)],
+                    ["Completed Sales", String(reportOrders.length)],
                     ["Net Sales", formatCurrency(reportNetSalesTotal)],
                     ["Gross Billed", formatCurrency(reportGrossBilledTotal)],
                     ["Avg Order Value", formatCurrency(reportAverageOrderValue)],
