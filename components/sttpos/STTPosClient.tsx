@@ -4232,6 +4232,7 @@ function openAdminVoidsWithPin() {
       if (tabsError) {
         setCustomerTabs([]);
         setCustomerTabItems([]);
+        setStatusMessage(`Could not load customer tabs: ${tabsError.message}`);
         return;
       }
 
@@ -4269,14 +4270,17 @@ function openAdminVoidsWithPin() {
         .from("customer_tab_items")
         .select("*")
         .in("tab_id", tabIds)
+        .order("round_number", { ascending: true })
         .order("added_at", { ascending: true });
 
       if (itemsError) {
+        // Keep the tab cards visible and show the real problem instead of silently hiding orders.
         setCustomerTabItems([]);
+        setStatusMessage(`Customer tabs loaded, but tab orders could not load: ${itemsError.message}`);
         return;
       }
 
-      setCustomerTabItems(((itemsData || []) as any[]).map((row: any) => ({
+      const nextItems: CustomerTabItem[] = ((itemsData || []) as any[]).map((row: any) => ({
         id: Number(row.id),
         tab_id: Number(row.tab_id),
         round_number: Number(row.round_number || 1),
@@ -4288,9 +4292,14 @@ function openAdminVoidsWithPin() {
         modifiers_text: row.modifiers_text ?? null,
         notes: row.notes ?? null,
         added_at: String(row.added_at || row.created_at || new Date().toISOString()),
-      })));
+      }));
+
+      setCustomerTabItems(nextItems);
+      if (tabs.length > 0) {
+        setStatusMessage(`Loaded ${tabs.length} open tab${tabs.length === 1 ? "" : "s"} with ${nextItems.length} item${nextItems.length === 1 ? "" : "s"}`);
+      }
     } catch (error) {
-      console.warn("Customer tabs skipped", error);
+      setStatusMessage(error instanceof Error ? `Could not load customer tabs: ${error.message}` : "Could not load customer tabs");
     }
   }
 
@@ -4457,50 +4466,50 @@ function openAdminVoidsWithPin() {
       return;
     }
 
-    const tab = customerTabs.find((row) => Number(row.id) === Number(targetTabId));
-    const roundNumber =
-      Math.max(0, ...customerTabItems.filter((item) => Number(item.tab_id) === Number(targetTabId)).map((item) => Number(item.round_number || 0))) + 1;
+    setSaving(true);
+    try {
+      const tab = customerTabs.find((row) => Number(row.id) === Number(targetTabId));
+      const roundNumber =
+        Math.max(
+          0,
+          ...customerTabItems
+            .filter((item) => Number(item.tab_id) === Number(targetTabId))
+            .map((item) => Number(item.round_number || 0))
+        ) + 1;
 
-    const itemPayload = cart.map((item) => {
-      const unit = getCartItemUnitPrice(item);
-      return {
-        tab_id: targetTabId,
-        round_number: roundNumber,
-        product_id: item.product_id,
-        product_name: item.name,
-        quantity: item.quantity,
-        unit_price: unit,
-        line_total: unit * item.quantity,
-        modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
-        notes: item.notes || null,
-        added_at: new Date().toISOString(),
-        added_by: staffProfile?.id || null,
-      };
-    });
+      const nowIso = new Date().toISOString();
 
-    const { data: insertedItems, error: itemsError } = await supabase
-      .from("customer_tab_items")
-      .insert(itemPayload)
-      .select("*");
+      const itemPayload = cart.map((item) => {
+        const unit = getCartItemUnitPrice(item);
+        return {
+          tab_id: targetTabId,
+          round_number: roundNumber,
+          product_id: item.product_id,
+          product_name: item.name,
+          quantity: item.quantity,
+          unit_price: unit,
+          line_total: unit * item.quantity,
+          modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
+          notes: item.notes || null,
+          added_at: nowIso,
+          added_by: staffProfile?.id || null,
+        };
+      });
 
-    if (itemsError) {
-      setStatusMessage(`Could not add items to tab: ${itemsError.message}`);
-      return;
-    }
+      const { data: insertedItems, error: itemsError } = await supabase
+        .from("customer_tab_items")
+        .insert(itemPayload)
+        .select("*");
 
-    const tabForPrint = tab || {
-      id: Number(targetTabId),
-      tab_number: `TAB-${targetTabId}`,
-      customer_name: customerName || "Guest",
-      customer_phone: customerPhone || null,
-      table_name: tabTableName || null,
-    } as CustomerTab;
+      if (itemsError) {
+        throw new Error(`Could not add items to tab: ${itemsError.message}`);
+      }
 
-    const printMessage = await printTabRoundArtifacts(
-      tabForPrint,
-      ((insertedItems || []) as any[]).map((row: any) => ({
-        id: Number(row.id),
-        tab_id: Number(row.tab_id),
+      const insertedRows = Array.isArray(insertedItems) && insertedItems.length > 0 ? insertedItems : itemPayload;
+
+      const normalizedInsertedItems: CustomerTabItem[] = insertedRows.map((row: any, index: number) => ({
+        id: Number(row.id || Date.now() + index),
+        tab_id: Number(row.tab_id || targetTabId),
         round_number: Number(row.round_number || roundNumber),
         product_id: row.product_id == null ? null : Number(row.product_id),
         product_name: String(row.product_name || "Item"),
@@ -4509,14 +4518,41 @@ function openAdminVoidsWithPin() {
         line_total: Number(row.line_total || 0),
         modifiers_text: row.modifiers_text ?? null,
         notes: row.notes ?? null,
-        added_at: String(row.added_at || new Date().toISOString()),
-      }))
-    );
+        added_at: String(row.added_at || nowIso),
+      }));
 
-    setCart([]);
-    resetLineBuilder();
-    setStatusMessage(`${isNewTab ? "Customer tab opened" : "Items added to tab"} | ${printMessage}`);
-    await loadCustomerTabs();
+      // Show the new round immediately. Do not wait for another Supabase fetch.
+      setCustomerTabItems((prev) => [
+        ...prev.filter((item) => !normalizedInsertedItems.some((newItem) => Number(newItem.id) === Number(item.id))),
+        ...normalizedInsertedItems,
+      ]);
+
+      const tabForPrint = tab || {
+        id: Number(targetTabId),
+        tab_number: `TAB-${targetTabId}`,
+        customer_name: customerName || "Guest",
+        customer_phone: customerPhone || null,
+        table_name: tabTableName || null,
+      } as CustomerTab;
+
+      const printMessage = await printTabRoundArtifacts(tabForPrint, normalizedInsertedItems);
+
+      setCart([]);
+      resetLineBuilder();
+      setSelectedCustomerTabId(Number(targetTabId));
+      setViewMode("tabs");
+      setStatusMessage(`${isNewTab ? "Customer tab opened" : "Items added to tab"} - Round ${roundNumber} (${normalizedInsertedItems.length} item${normalizedInsertedItems.length === 1 ? "" : "s"}) | ${printMessage}`);
+
+      // Refresh from database after optimistic display. If refresh fails, the optimistic rows still showed and the error is visible.
+      await loadCustomerTabs();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not add items to tab");
+      if (isNewTab) {
+        setViewMode("tabs");
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function closeCustomerTab(tab: CustomerTab) {
@@ -8769,24 +8805,30 @@ function openAdminVoidsWithPin() {
                       </div>
 
                       <div className="mt-4 space-y-3">
-                        {roundNumbers.map((round) => (
-                          <div key={`${tab.id}-round-${round}`} className="rounded-2xl border border-rose-100 bg-rose-50 p-3">
-                            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-500">Round {round}</div>
-                            <div className="space-y-2">
-                              {tabItems.filter((item) => item.round_number === round).map((item) => (
-                                <div key={item.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
-                                  <div>
-                                    <strong>{item.product_name} x {item.quantity}</strong>
-                                    <div className="text-xs text-rose-700/60">
-                                      {item.modifiers_text ? `Mods: ${item.modifiers_text}` : ""} {item.notes ? `Note: ${item.notes}` : ""}
-                                    </div>
-                                  </div>
-                                  <strong>{formatCurrency(item.line_total)}</strong>
-                                </div>
-                              ))}
-                            </div>
+                        {tabItems.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            This tab is open, but no order rounds are loaded yet. Add items from the POS screen, then click Add Current Cart To Selected Tab. If you already added items, click Refresh Tabs and check the pink status message at the top for a database error.
                           </div>
-                        ))}
+                        ) : (
+                          roundNumbers.map((round) => (
+                            <div key={`${tab.id}-round-${round}`} className="rounded-2xl border border-rose-100 bg-rose-50 p-3">
+                              <div className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-500">Round {round}</div>
+                              <div className="space-y-2">
+                                {tabItems.filter((item) => item.round_number === round).map((item) => (
+                                  <div key={item.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
+                                    <div>
+                                      <strong>{item.product_name} x {item.quantity}</strong>
+                                      <div className="text-xs text-rose-700/60">
+                                        {item.modifiers_text ? `Mods: ${item.modifiers_text}` : ""} {item.notes ? `Note: ${item.notes}` : ""}
+                                      </div>
+                                    </div>
+                                    <strong>{formatCurrency(item.line_total)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
 
                       <div className="mt-4 flex flex-wrap gap-2">
