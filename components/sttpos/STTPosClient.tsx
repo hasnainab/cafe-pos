@@ -2694,6 +2694,61 @@ function openAdminVoidsWithPin() {
     loadElectronPrinting();
   }, []);
 
+  useEffect(() => {
+    if (!authChecked || !staffProfile) return;
+
+    let cancelled = false;
+
+    const loadInitialPosData = async () => {
+      try {
+        setStatusMessage("Loading POS data...");
+
+        await Promise.all([
+          loadCategories(),
+          loadModifierLibrary(),
+          loadModifierInventoryEffects(),
+          loadPaymentMethods(),
+          loadSalesTaxes(),
+          loadPromotions(),
+          loadProducts(),
+          loadActiveOrders(),
+          loadCompletedOrders(),
+          loadReportData(),
+          loadCustomerList(),
+          loadVendors(),
+          loadInventoryItems(),
+          loadVendorShipments(),
+          loadVendorShipmentLines(),
+          loadOrderCosts(),
+          loadInventoryMovements(),
+          loadVendorPayments(),
+          loadVendorPayables(),
+          loadInventoryBatches(),
+          loadStockAudits(),
+          loadStockAuditLines(),
+          loadInventoryItemCategories(),
+          loadAllProductRecipes(),
+          loadStaffProfiles(),
+          loadCustomerTabs(),
+        ]);
+
+        if (!cancelled) {
+          setStatusMessage("POS data loaded");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatusMessage(error instanceof Error ? `Could not load POS data: ${error.message}` : "Could not load POS data");
+        }
+      }
+    };
+
+    loadInitialPosData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, staffProfile]);
+
   async function loadCategories() {
     const { data, error } = await supabase
       .from("categories")
@@ -4223,10 +4278,10 @@ function openAdminVoidsWithPin() {
 
   async function loadCustomerTabs() {
     try {
+      // Load parent tabs first.
       const { data: tabsData, error: tabsError } = await supabase
         .from("customer_tabs")
         .select("*")
-        .in("status", ["open", "closing"])
         .order("opened_at", { ascending: false });
 
       if (tabsError) {
@@ -4236,51 +4291,24 @@ function openAdminVoidsWithPin() {
         return;
       }
 
-      const tabs: CustomerTab[] = ((tabsData || []) as any[]).map((row: any) => ({
-        id: Number(row.id),
-        tab_number: String(row.tab_number || `TAB-${row.id}`),
-        customer_id: row.customer_id == null ? null : Number(row.customer_id),
-        customer_name: row.customer_name ?? null,
-        customer_phone: row.customer_phone ?? null,
-        table_name: row.table_name ?? null,
-        guest_count: Number(row.guest_count || 1),
-        status: String(row.status || "open"),
-        opened_at: String(row.opened_at),
-        closed_at: row.closed_at ?? null,
-        subtotal: Number(row.subtotal || 0),
-        tax_total: Number(row.tax_total || 0),
-        discount_total: Number(row.discount_total || 0),
-        total: Number(row.total || 0),
-        paid_total: Number(row.paid_total || 0),
-        balance_due: Number(row.balance_due || 0),
-        payment_method_id: row.payment_method_id == null ? null : Number(row.payment_method_id),
-        final_order_id: row.final_order_id == null ? null : Number(row.final_order_id),
-        notes: row.notes ?? null,
-      }));
-
-      setCustomerTabs(tabs);
-
-      const tabIds = tabs.map((tab) => tab.id);
-      if (tabIds.length === 0) {
-        setCustomerTabItems([]);
-        return;
-      }
-
-      const { data: itemsData, error: itemsError } = await supabase
+      // Also load recent tab item rows directly. This makes the Tabs screen resilient if a parent
+      // customer_tabs row was accidentally deleted during testing.
+      const { data: allItemsData, error: allItemsError } = await supabase
         .from("customer_tab_items")
         .select("*")
-        .in("tab_id", tabIds)
+        .order("tab_id", { ascending: false })
         .order("round_number", { ascending: true })
-        .order("added_at", { ascending: true });
+        .order("added_at", { ascending: true })
+        .limit(500);
 
-      if (itemsError) {
-        // Keep the tab cards visible and show the real problem instead of silently hiding orders.
+      if (allItemsError) {
+        setCustomerTabs([]);
         setCustomerTabItems([]);
-        setStatusMessage(`Customer tabs loaded, but tab orders could not load: ${itemsError.message}`);
+        setStatusMessage(`Could not load customer tab items: ${allItemsError.message}`);
         return;
       }
 
-      const nextItems: CustomerTabItem[] = ((itemsData || []) as any[]).map((row: any) => ({
+      const normalizedAllItems: CustomerTabItem[] = ((allItemsData || []) as any[]).map((row: any) => ({
         id: Number(row.id),
         tab_id: Number(row.tab_id),
         round_number: Number(row.round_number || 1),
@@ -4294,20 +4322,122 @@ function openAdminVoidsWithPin() {
         added_at: String(row.added_at || row.created_at || new Date().toISOString()),
       }));
 
+      const visibleTabRows = ((tabsData || []) as any[]).filter((row: any) => {
+        const status = String(row.status || "open").trim().toLowerCase();
+        return status !== "closed" && status !== "voided" && status !== "cancelled" && status !== "canceled";
+      });
+
+      const tabsFromParents: CustomerTab[] = visibleTabRows.map((row: any) => ({
+        id: Number(row.id),
+        tab_number: String(row.tab_number || `TAB-${row.id}`),
+        customer_id: row.customer_id == null ? null : Number(row.customer_id),
+        customer_name: row.customer_name ?? null,
+        customer_phone: row.customer_phone ?? null,
+        table_name: row.table_name ?? null,
+        guest_count: Number(row.guest_count || 1),
+        status: String(row.status || "open"),
+        opened_at: String(row.opened_at || row.created_at || new Date().toISOString()),
+        closed_at: row.closed_at ?? null,
+        subtotal: Number(row.subtotal || 0),
+        tax_total: Number(row.tax_total || 0),
+        discount_total: Number(row.discount_total || 0),
+        total: Number(row.total || 0),
+        paid_total: Number(row.paid_total || 0),
+        balance_due: Number(row.balance_due || 0),
+        payment_method_id: row.payment_method_id == null ? null : Number(row.payment_method_id),
+        final_order_id: row.final_order_id == null ? null : Number(row.final_order_id),
+        notes: row.notes ?? null,
+      }));
+
+      const parentTabIds = new Set(tabsFromParents.map((tab) => Number(tab.id)));
+      const orphanTabIds = Array.from(
+        new Set(
+          normalizedAllItems
+            .map((item) => Number(item.tab_id || 0))
+            .filter((tabId) => tabId > 0 && !parentTabIds.has(tabId))
+        )
+      );
+
+      const recoveredTabs: CustomerTab[] = orphanTabIds.map((tabId) => {
+        const itemsForTab = normalizedAllItems.filter((item) => Number(item.tab_id) === Number(tabId));
+        const subtotal = itemsForTab.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+        const firstItemDate =
+          itemsForTab
+            .map((item) => item.added_at)
+            .filter(Boolean)
+            .sort()[0] || new Date().toISOString();
+
+        return {
+          id: tabId,
+          tab_number: `RECOVERED-${tabId}`,
+          customer_id: null,
+          customer_name: `Recovered Tab ${tabId}`,
+          customer_phone: null,
+          table_name: null,
+          guest_count: 1,
+          status: "open",
+          opened_at: firstItemDate,
+          closed_at: null,
+          subtotal,
+          tax_total: 0,
+          discount_total: 0,
+          total: subtotal,
+          paid_total: 0,
+          balance_due: subtotal,
+          payment_method_id: null,
+          final_order_id: null,
+          notes: "This tab was rebuilt in the POS screen because item rows existed without a matching customer_tabs row.",
+        };
+      });
+
+      const tabs = [...tabsFromParents, ...recoveredTabs].sort(
+        (a, b) => new Date(b.opened_at || 0).getTime() - new Date(a.opened_at || 0).getTime()
+      );
+
+      const visibleTabIds = new Set(tabs.map((tab) => Number(tab.id)));
+      const nextItems = normalizedAllItems.filter((item) => visibleTabIds.has(Number(item.tab_id)));
+
+      setCustomerTabs(tabs);
       setCustomerTabItems(nextItems);
+
       if (tabs.length > 0) {
-        setStatusMessage(`Loaded ${tabs.length} open tab${tabs.length === 1 ? "" : "s"} with ${nextItems.length} item${nextItems.length === 1 ? "" : "s"}`);
+        const recoveredNote = recoveredTabs.length > 0 ? ` (${recoveredTabs.length} recovered from item rows)` : "";
+        setStatusMessage(`Loaded ${tabs.length} open tab${tabs.length === 1 ? "" : "s"} with ${nextItems.length} item${nextItems.length === 1 ? "" : "s"}${recoveredNote}`);
+      } else {
+        setStatusMessage("No open customer tabs found. Add items to cart, then open a tab.");
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? `Could not load customer tabs: ${error.message}` : "Could not load customer tabs");
     }
   }
 
+  useEffect(() => {
+    if (!authChecked || !staffProfile || viewMode !== "tabs") return;
+    loadCustomerTabs();
+  }, [authChecked, staffProfile, viewMode]);
+
+  function resetNewCustomerTabForm() {
+    setSelectedCustomerTabId(null);
+    setCustomerName("");
+    setCustomerPhone("");
+    setCurrentCustomer(null);
+    setTabTableName("");
+    setTabGuestCount("1");
+    setTabNotes("");
+    setStatusMessage("Ready to open a new customer tab. Add items to cart, then click Open Tab With Current Cart.");
+  }
+
   function getNextTabNumber() {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, "0");
-    const count = customerTabs.filter((tab) => String(tab.tab_number || "").startsWith(`TAB-${dd}-`)).length + 1;
-    return `TAB-${dd}-${String(count).padStart(3, "0")}`;
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const random = Math.random().toString(36).slice(2, 5).toUpperCase();
+
+    // Use time + random so a new customer tab can always be created,
+    // even if older test tabs were voided/deleted but their tab_number still exists.
+    return `TAB-${dd}-${hh}${mm}${ss}-${random}`;
   }
 
   function buildTabRoundCartSnapshot(tabItems: CustomerTabItem[], tab: CustomerTab): CartItem[] {
@@ -4415,23 +4545,28 @@ function openAdminVoidsWithPin() {
 
   async function createCustomerTabFromCart() {
     if (cart.length === 0) {
-      setStatusMessage("Add items to the cart before opening a customer tab");
+      setStatusMessage("Add items to cart before opening a customer tab");
       return;
     }
 
     setSaving(true);
     try {
-      const customer = customerPhone.trim() ? await ensureCustomer() : null;
       const tabPayload = {
         tab_number: getNextTabNumber(),
-        customer_id: customer?.id ?? null,
-        customer_name: customer?.name || customerName || "Guest",
-        customer_phone: customer?.phone || customerPhone || null,
-        table_name: tabTableName.trim() || null,
+        customer_id: currentCustomer?.id ?? null,
+        customer_name: (customerName || currentCustomer?.name || "Guest").trim() || "Guest",
+        customer_phone: customerPhone || currentCustomer?.phone || null,
+        table_name: tabTableName || null,
         guest_count: Math.max(1, Number(tabGuestCount || 1)),
         status: "open",
         opened_at: new Date().toISOString(),
-        notes: tabNotes.trim() || null,
+        subtotal: 0,
+        tax_total: 0,
+        discount_total: 0,
+        total: 0,
+        paid_total: 0,
+        balance_due: 0,
+        notes: tabNotes || null,
       };
 
       const { data: tabRow, error: tabError } = await supabase
@@ -4440,16 +4575,51 @@ function openAdminVoidsWithPin() {
         .select("*")
         .single();
 
-      if (tabError) throw new Error(`Could not open tab: ${tabError.message}`);
+      if (tabError) throw new Error(`Could not open new customer tab: ${tabError.message}`);
+      if (!tabRow?.id) throw new Error("Customer tab was not created. Supabase did not return a tab id.");
 
-      await addCartItemsToTab(Number(tabRow.id), true);
-      setSelectedCustomerTabId(Number(tabRow.id));
+      const freshTab: CustomerTab = {
+        id: Number(tabRow.id),
+        tab_number: String(tabRow.tab_number || tabPayload.tab_number),
+        customer_id: tabRow.customer_id == null ? null : Number(tabRow.customer_id),
+        customer_name: tabRow.customer_name ?? null,
+        customer_phone: tabRow.customer_phone ?? null,
+        table_name: tabRow.table_name ?? null,
+        guest_count: Number(tabRow.guest_count || 1),
+        status: String(tabRow.status || "open"),
+        opened_at: String(tabRow.opened_at || new Date().toISOString()),
+        closed_at: tabRow.closed_at ?? null,
+        subtotal: Number(tabRow.subtotal || 0),
+        tax_total: Number(tabRow.tax_total || 0),
+        discount_total: Number(tabRow.discount_total || 0),
+        total: Number(tabRow.total || 0),
+        paid_total: Number(tabRow.paid_total || 0),
+        balance_due: Number(tabRow.balance_due || 0),
+        payment_method_id: tabRow.payment_method_id == null ? null : Number(tabRow.payment_method_id),
+        final_order_id: tabRow.final_order_id == null ? null : Number(tabRow.final_order_id),
+        notes: tabRow.notes ?? null,
+      };
+
+      setCustomerTabs((prev) => [
+        freshTab,
+        ...prev.filter((row) => Number(row.id) !== Number(freshTab.id)),
+      ]);
+      setSelectedCustomerTabId(Number(freshTab.id));
+
+      await addCartItemsToTab(Number(freshTab.id), true);
+
       setTabTableName("");
       setTabGuestCount("1");
       setTabNotes("");
+      setCustomerName("");
+      setCustomerPhone("");
+      setCurrentCustomer(null);
+
+      await loadCustomerTabs();
       setViewMode("tabs");
+      setStatusMessage(`Opened new customer tab ${freshTab.tab_number}`);
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Could not open tab");
+      setStatusMessage(error instanceof Error ? error.message : "Could not open customer tab");
     } finally {
       setSaving(false);
     }
@@ -4468,7 +4638,102 @@ function openAdminVoidsWithPin() {
 
     setSaving(true);
     try {
-      const tab = customerTabs.find((row) => Number(row.id) === Number(targetTabId));
+      let tab = customerTabs.find((row) => Number(row.id) === Number(targetTabId));
+
+      // New tabs are inserted in Supabase before this function runs. Because React state
+      // may not have refreshed yet, first read the parent tab from Supabase. Only recreate
+      // a recovered tab if the parent row truly does not exist.
+      if (!tab) {
+        const { data: existingTabRow, error: existingTabError } = await supabase
+          .from("customer_tabs")
+          .select("*")
+          .eq("id", Number(targetTabId))
+          .maybeSingle();
+
+        if (existingTabError) {
+          throw new Error(`Could not verify customer tab: ${existingTabError.message}`);
+        }
+
+        if (existingTabRow) {
+          tab = {
+            id: Number(existingTabRow.id),
+            tab_number: String(existingTabRow.tab_number || `TAB-${targetTabId}`),
+            customer_id: existingTabRow.customer_id == null ? null : Number(existingTabRow.customer_id),
+            customer_name: existingTabRow.customer_name ?? null,
+            customer_phone: existingTabRow.customer_phone ?? null,
+            table_name: existingTabRow.table_name ?? null,
+            guest_count: Number(existingTabRow.guest_count || 1),
+            status: String(existingTabRow.status || "open"),
+            opened_at: String(existingTabRow.opened_at || new Date().toISOString()),
+            closed_at: existingTabRow.closed_at ?? null,
+            subtotal: Number(existingTabRow.subtotal || 0),
+            tax_total: Number(existingTabRow.tax_total || 0),
+            discount_total: Number(existingTabRow.discount_total || 0),
+            total: Number(existingTabRow.total || 0),
+            paid_total: Number(existingTabRow.paid_total || 0),
+            balance_due: Number(existingTabRow.balance_due || 0),
+            payment_method_id: existingTabRow.payment_method_id == null ? null : Number(existingTabRow.payment_method_id),
+            final_order_id: existingTabRow.final_order_id == null ? null : Number(existingTabRow.final_order_id),
+            notes: existingTabRow.notes ?? null,
+          };
+        } else {
+          const recoveredPayload = {
+            id: Number(targetTabId),
+            tab_number: `RECOVERED-${targetTabId}-${Date.now()}`,
+            customer_name: customerName || `Recovered Tab ${targetTabId}`,
+            customer_phone: customerPhone || null,
+            table_name: tabTableName || null,
+            guest_count: Math.max(1, Number(tabGuestCount || 1)),
+            status: "open",
+            opened_at: new Date().toISOString(),
+            subtotal: 0,
+            tax_total: 0,
+            discount_total: 0,
+            total: 0,
+            paid_total: 0,
+            balance_due: 0,
+            notes: "Recreated automatically because the parent customer tab was missing.",
+          };
+
+          const { data: recoveredTabRow, error: recoveredTabError } = await supabase
+            .from("customer_tabs")
+            .upsert(recoveredPayload, { onConflict: "id" })
+            .select("*")
+            .single();
+
+          if (recoveredTabError) {
+            throw new Error(`Could not recover missing customer tab: ${recoveredTabError.message}`);
+          }
+
+          tab = {
+            id: Number(recoveredTabRow.id),
+            tab_number: String(recoveredTabRow.tab_number || `RECOVERED-${targetTabId}`),
+            customer_id: recoveredTabRow.customer_id == null ? null : Number(recoveredTabRow.customer_id),
+            customer_name: recoveredTabRow.customer_name ?? null,
+            customer_phone: recoveredTabRow.customer_phone ?? null,
+            table_name: recoveredTabRow.table_name ?? null,
+            guest_count: Number(recoveredTabRow.guest_count || 1),
+            status: String(recoveredTabRow.status || "open"),
+            opened_at: String(recoveredTabRow.opened_at || new Date().toISOString()),
+            closed_at: recoveredTabRow.closed_at ?? null,
+            subtotal: Number(recoveredTabRow.subtotal || 0),
+            tax_total: Number(recoveredTabRow.tax_total || 0),
+            discount_total: Number(recoveredTabRow.discount_total || 0),
+            total: Number(recoveredTabRow.total || 0),
+            paid_total: Number(recoveredTabRow.paid_total || 0),
+            balance_due: Number(recoveredTabRow.balance_due || 0),
+            payment_method_id: recoveredTabRow.payment_method_id == null ? null : Number(recoveredTabRow.payment_method_id),
+            final_order_id: recoveredTabRow.final_order_id == null ? null : Number(recoveredTabRow.final_order_id),
+            notes: recoveredTabRow.notes ?? null,
+          };
+        }
+
+        setCustomerTabs((prev) => [
+          tab!,
+          ...prev.filter((row) => Number(row.id) !== Number(tab!.id)),
+        ]);
+      }
+
       const roundNumber =
         Math.max(
           0,
@@ -4651,134 +4916,48 @@ function openAdminVoidsWithPin() {
   }
 
   async function voidCustomerTab(tab: CustomerTab) {
-    const confirmed = window.confirm(`Cancel open tab ${tab.tab_number}? This will not create a final bill.`);
+    const confirmed = window.confirm(
+      `Cancel ${tab.tab_number || `tab ${tab.id}`}? This will remove it from open tabs and delete its running-bill item rows.`
+    );
+
     if (!confirmed) return;
 
-    const { error } = await supabase
-      .from("customer_tabs")
-      .update({ status: "voided", closed_at: new Date().toISOString(), closed_by: staffProfile?.id || null })
-      .eq("id", tab.id);
+    setSaving(true);
+    try {
+      // Delete item rows first. This also clears recovered/orphan tabs that were created during testing.
+      const { error: itemDeleteError } = await supabase
+        .from("customer_tab_items")
+        .delete()
+        .eq("tab_id", Number(tab.id));
 
-    if (error) {
-      setStatusMessage(`Could not cancel tab: ${error.message}`);
-      return;
-    }
+      if (itemDeleteError) throw new Error(`Could not delete tab items: ${itemDeleteError.message}`);
 
-    setStatusMessage(`Tab ${tab.tab_number} cancelled`);
-    await loadCustomerTabs();
-  }
+      // Soft cancel the parent tab when it exists.
+      const { error: tabUpdateError } = await supabase
+        .from("customer_tabs")
+        .update({
+          status: "voided",
+          closed_at: new Date().toISOString(),
+          notes: `${tab.notes || ""} | Cancelled from POS Customer Tabs screen.`.trim(),
+        })
+        .eq("id", Number(tab.id));
 
-  const refreshAll = useCallback(async () => {
-    setStatusMessage("Refreshing...");
-    await loadCategories();
-    await loadModifierLibrary();
-    await loadModifierInventoryEffects();
-    await loadSalesTaxes();
-    await loadPaymentMethods();
-    await loadPromotions();
-    await loadProducts();
-    await loadActiveOrders();
-    await loadCompletedOrders();
-    await loadReportData();
-    await loadCustomerList();
-    await loadCustomerTabs();
-    await loadVendors();
-    await loadInventoryItemCategories();
-    await loadInventoryItems();
-    await loadVendorShipments();
-    await loadVendorShipmentLines();
-    await loadVendorPayments();
-    await loadOrderCosts();
-    await loadInventoryMovements();
-    await loadVendorPayables();
-    await loadInventoryBatches();
-    await loadStockAudits();
-    await loadStockAuditLines();
-    await loadAllProductRecipes();
-    await loadStaffProfiles();
-    setStatusMessage("Ready");
-  }, []);
+      if (tabUpdateError) throw new Error(`Could not cancel tab: ${tabUpdateError.message}`);
 
-  useEffect(() => {
-    refreshAll();
-  }, [refreshAll]);
+      setCustomerTabItems((prev) => prev.filter((item) => Number(item.tab_id) !== Number(tab.id)));
+      setCustomerTabs((prev) => prev.filter((row) => Number(row.id) !== Number(tab.id)));
 
-  useEffect(() => {
-    if (!selectedRecipeProductId) {
-      setProductRecipes([]);
-      resetRecipeEditorRows();
-      return;
-    }
-    loadProductRecipes(Number(selectedRecipeProductId));
-  }, [selectedRecipeProductId, inventoryItems]);
-
-  useEffect(() => {
-    if (!selectedShipmentHistory) return;
-    setVendorPaymentForm((prev) => ({
-      ...prev,
-      vendor_id: Number(selectedShipmentHistory.vendor_id),
-      shipment_id: Number(selectedShipmentHistory.id),
-      payment_date: new Date().toISOString().slice(0, 10),
-      amount: "",
-      payment_method: "cash",
-      reference_number: "",
-      notes: "",
-    }));
-    setSelectedShipmentPaymentLineIds([]);
-    setVendorPaymentMode("full_intake");
-  }, [selectedShipmentHistory?.id]);
-
-  useEffect(() => {
-    if (!autoLookupEnabled) return;
-    const digits = digitsOnly(customerPhone);
-    if (!digits || digits.length < 10) {
-      if (!customerPhone.trim()) clearLoadedCustomer();
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      lookupCustomerByPhone();
-    }, 350);
-
-    return () => clearTimeout(timer);
-  }, [autoLookupEnabled, clearLoadedCustomer, customerPhone, lookupCustomerByPhone]);
-
-  function updateInventoryBatchRow(rowId: string, patch: Partial<InventoryBatchRowForm>) {
-    setInventoryBatchRows((prev) =>
-      prev.map((row) => {
-        if (row.row_id !== rowId) return row;
-        const next = { ...row, ...patch };
-
-        if (next.unit_mode === "pack") {
-          const qtyPerPack = Number(next.qty_per_pack || 0);
-          const numberOfPacks = Number(next.number_of_packs || 0);
-          next.total_qty = qtyPerPack > 0 && numberOfPacks > 0 ? String(qtyPerPack * numberOfPacks) : "";
-        }
-
-        return next;
-      })
-    );
-  }
-
-  function addInventoryBatchRow() {
-    setInventoryBatchRows((prev) => {
-      if (prev.length >= 5) {
-        setStatusMessage("You can add up to 5 inventory items in one batch");
-        return prev;
+      if (Number(selectedCustomerTabId) === Number(tab.id)) {
+        setSelectedCustomerTabId(null);
       }
-      return [...prev, makeInventoryBatchRow(prev.length + 1)];
-    });
-  }
 
-  function removeInventoryBatchRow(rowId: string) {
-    setInventoryBatchRows((prev) => {
-      if (prev.length <= 1) return prev;
-      return prev.filter((row) => row.row_id !== rowId);
-    });
-  }
-
-  function clearInventoryBatchRows() {
-    setInventoryBatchRows([makeInventoryBatchRow(1)]);
+      await loadCustomerTabs();
+      setStatusMessage(`${tab.tab_number || "Customer tab"} cancelled`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not cancel customer tab");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function saveInventoryBatch() {
@@ -8672,14 +8851,23 @@ function openAdminVoidsWithPin() {
                         className="mt-2 w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
                         placeholder="Optional tab note"
                       />
-                      <button
-                        type="button"
-                        onClick={createCustomerTabFromCart}
-                        disabled={saving || cart.length === 0}
-                        className="mt-2 w-full rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
-                      >
-                        Open Tab With Current Cart
-                      </button>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={resetNewCustomerTabForm}
+                          className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700"
+                        >
+                          New Customer Tab
+                        </button>
+                        <button
+                          type="button"
+                          onClick={createCustomerTabFromCart}
+                          disabled={saving || cart.length === 0}
+                          className="rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
+                        >
+                          Open Tab With Current Cart
+                        </button>
+                      </div>
                       {customerTabs.length > 0 ? (
                         <div className="mt-2 grid gap-2">
                           <select
@@ -8774,7 +8962,11 @@ function openAdminVoidsWithPin() {
             <div className="space-y-4">
               {customerTabs.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 p-6 text-sm text-rose-700/70">
-                  No open customer tabs. Build a cart in POS, then click Open Tab With Current Cart.
+                  <div className="font-semibold text-rose-900">No open customer tabs are loaded.</div>
+                  <div className="mt-2">Build a cart in POS, then click Open Tab With Current Cart.</div>
+                  <div className="mt-2 text-xs">
+                    If you already opened a tab, click Refresh Tabs and read the pink status message at the top. If it says a table is missing or permission is denied, run the customer tabs SQL in Supabase again.
+                  </div>
                 </div>
               ) : (
                 customerTabs.map((tab) => {
