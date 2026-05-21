@@ -7080,6 +7080,102 @@ function openAdminVoidsWithPin() {
     await refreshAll();
   }
 
+  async function deleteProductFromPos(product?: Product) {
+    if (!canEditSetup) {
+      setStatusMessage("You do not have permission to delete products");
+      return;
+    }
+
+    const targetProductId = Number(product?.id || productForm.id || 0);
+    const targetProductName = String(product?.name || productForm.name || "").trim() || "this product";
+
+    if (!targetProductId) {
+      setStatusMessage("Select a product first");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${targetProductName} from POS?\n\nThis will hide it from the selling screen but keep old order history safe.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({ active: false })
+        .eq("id", targetProductId);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (Number(productForm.id || 0) === targetProductId) {
+        setProductForm({
+          id: null,
+          name: "",
+          price: "",
+          active: true,
+          categoryIds: [],
+          modifierIds: [],
+        });
+      }
+
+      if (Number(selectedProductForCart?.id || 0) === targetProductId) {
+        resetLineBuilder();
+      }
+
+      setProducts((prev) =>
+        prev.map((row) =>
+          Number(row.id) === targetProductId ? { ...row, active: false } : row
+        )
+      );
+
+      await recordAuditLog("product_deleted_from_pos", "product", targetProductId, {
+        name: targetProductName,
+        soft_delete: true,
+      });
+
+      setStatusMessage(`${targetProductName} deleted from POS`);
+      await refreshAll();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? `Could not delete product: ${error.message}` : "Could not delete product");
+    }
+  }
+
+  async function restoreProductToPos(product: Product) {
+    if (!canEditSetup) {
+      setStatusMessage("You do not have permission to restore products");
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({ active: true })
+        .eq("id", product.id);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setProducts((prev) =>
+        prev.map((row) =>
+          Number(row.id) === Number(product.id) ? { ...row, active: true } : row
+        )
+      );
+
+      await recordAuditLog("product_restored_to_pos", "product", product.id, {
+        name: product.name,
+      });
+
+      setStatusMessage(`${product.name} restored to POS`);
+      await refreshAll();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? `Could not restore product: ${error.message}` : "Could not restore product");
+    }
+  }
+
   function loadProductIntoForm(product: Product) {
     setProductForm({
       id: product.id,
@@ -12395,6 +12491,15 @@ function openAdminVoidsWithPin() {
                       className="w-full rounded-xl border px-3 py-2"
                     />
                   </div>
+                  <label className="flex items-center gap-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-900">
+                    <input
+                      type="checkbox"
+                      checked={productForm.active}
+                      onChange={(e) => setProductForm((prev) => ({ ...prev, active: e.target.checked }))}
+                      className="h-4 w-4"
+                    />
+                    Show this product in POS
+                  </label>
                 </div>
 
                 <div className="mt-4">
@@ -12453,13 +12558,22 @@ function openAdminVoidsWithPin() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     onClick={saveProduct}
                     className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-medium text-white shadow-sm"
                   >
                     {productForm.id ? "Update Product" : "Create Product"}
                   </button>
+                  {productForm.id ? (
+                    <button
+                      type="button"
+                      onClick={() => deleteProductFromPos()}
+                      className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700 hover:bg-red-100"
+                    >
+                      Delete From POS
+                    </button>
+                  ) : null}
                   <button
                     onClick={() =>
                       setProductForm({
@@ -12481,22 +12595,68 @@ function openAdminVoidsWithPin() {
               <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
                 <h2 className="mb-4 text-2xl font-semibold">Existing Products</h2>
                 <div className="grid gap-3 md:grid-cols-2">
-                  {products.map((product) => (
-                    <button
-                      key={product.id}
-                      onClick={() => loadProductIntoForm(product)}
-                      className="rounded-2xl border p-4 text-left"
-                    >
-                      <div className="font-semibold">{product.name}</div>
-                      <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
-                      <div className="mt-2 text-xs text-rose-700/70">
-                        Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
+                  {products.map((product) => {
+                    const isActive = product.active !== false;
+                    return (
+                      <div
+                        key={product.id}
+                        className={`rounded-2xl border p-4 text-left ${
+                          isActive ? "border-rose-100 bg-white" : "border-slate-200 bg-slate-50 opacity-75"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => loadProductIntoForm(product)}
+                          className="block w-full text-left"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="font-semibold">{product.name}</div>
+                            <span
+                              className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                                isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              {isActive ? "Live" : "Hidden"}
+                            </span>
+                          </div>
+                          <div className="text-sm text-rose-700/70">{formatCurrency(product.price)}</div>
+                          <div className="mt-2 text-xs text-rose-700/70">
+                            Categories: {product.categories.map((c) => c.name).join(", ") || "None"}
+                          </div>
+                          <div className="text-xs text-rose-700/70">
+                            Modifiers: {(productModifierMap[product.id] || []).length}
+                          </div>
+                        </button>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => loadProductIntoForm(product)}
+                            className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                          >
+                            Edit
+                          </button>
+                          {isActive ? (
+                            <button
+                              type="button"
+                              onClick={() => deleteProductFromPos(product)}
+                              className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100"
+                            >
+                              Delete From POS
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => restoreProductToPos(product)}
+                              className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Restore
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-xs text-rose-700/70">
-                        Modifiers: {(productModifierMap[product.id] || []).length}
-                      </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             </section>
