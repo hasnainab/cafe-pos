@@ -4543,6 +4543,43 @@ function openAdminVoidsWithPin() {
     return statuses.length > 0 ? statuses.join(" | ") : "Tab saved, auto print is off";
   }
 
+
+  async function refreshAll() {
+    try {
+      await Promise.all([
+        loadCategories(),
+        loadModifierLibrary(),
+        loadModifierInventoryEffects(),
+        loadPaymentMethods(),
+        loadSalesTaxes(),
+        loadPromotions(),
+        loadProducts(),
+        loadActiveOrders(),
+        loadCompletedOrders(),
+        loadReportData(),
+        loadCustomerList(),
+        loadVendors(),
+        loadInventoryItems(),
+        loadVendorShipments(),
+        loadVendorShipmentLines(),
+        loadOrderCosts(),
+        loadInventoryMovements(),
+        loadVendorPayments(),
+        loadVendorPayables(),
+        loadInventoryBatches(),
+        loadStockAudits(),
+        loadStockAuditLines(),
+        loadInventoryItemCategories(),
+        loadAllProductRecipes(),
+        loadStaffProfiles(),
+        loadCustomerTabs(),
+      ]);
+    } catch (error) {
+      console.error("Refresh failed", error);
+      setStatusMessage(error instanceof Error ? `Refresh failed: ${error.message}` : "Refresh failed");
+    }
+  }
+
   async function createCustomerTabFromCart() {
     if (cart.length === 0) {
       setStatusMessage("Add items to cart before opening a customer tab");
