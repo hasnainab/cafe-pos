@@ -7283,6 +7283,15 @@ function openAdminVoidsWithPin() {
       return;
     }
 
+    const cartSnapshot = cart.map((item) => ({
+      ...item,
+      modifiers: [...item.modifiers],
+    }));
+
+    const customerNameSnapshot = customerName || currentCustomer?.name || "Guest";
+    const selectedPaymentMethodName =
+      paymentMethods.find((p) => p.id === selectedPaymentMethodId)?.name || "";
+
     setSaving(true);
     try {
       const customer = customerPhone.trim() ? await ensureCustomer() : null;
@@ -7331,10 +7340,11 @@ function openAdminVoidsWithPin() {
         if (!message.includes("orders_order_number_key")) break;
       }
 
-      if (orderError) throw new Error(orderError.message);
+      if (orderError) throw new Error(`Order was not saved: ${orderError.message}`);
+      if (!orderRow?.id) throw new Error("Order was not saved: Supabase did not return an order id");
 
       const orderId = Number(orderRow.id);
-      const orderItemsPayload = cart.map((item) => {
+      const orderItemsPayload = cartSnapshot.map((item) => {
         const modifierNames = item.modifiers.map((m) => m.name).join(", ");
         const modifierTotal = item.modifiers.reduce((sum, mod) => sum + Number(mod.price_delta), 0);
         let unit = item.base_price + modifierTotal;
@@ -7354,86 +7364,111 @@ function openAdminVoidsWithPin() {
       });
 
       const { error: itemsError } = await supabase.from("order_items").insert(orderItemsPayload);
-      if (itemsError) throw new Error(itemsError.message);
-
-      await recordAuditLog("order_created", "order", orderId, {
-        order_number: orderNumber,
-        total: cartGrandTotal,
-        subtotal: cartSubtotal,
-        tax_total: cartTaxTotal,
-        discount_total: redeemablePoints + appliedBillDiscount,
-        item_count: cart.length,
-        payment_method_id: selectedPaymentMethodId,
-      });
-
-      if (appliedBillDiscount > 0) {
-        await recordAuditLog("discount_applied", "order", orderId, {
-          order_number: orderNumber,
-          bill_discount_mode: billDiscountMode,
-          bill_discount_percent: billDiscountPercentInput,
-          bill_discount_amount: appliedBillDiscount,
-        });
+      if (itemsError) {
+        // Do not leave a header-only order if item rows fail.
+        await supabase.from("orders").delete().eq("id", orderId);
+        throw new Error(`Order items were not saved: ${itemsError.message}`);
       }
 
-      if (customer) {
-        const customerUpdates: Record<string, number> = {
-          reward_points: Number(customer.reward_points || 0) - redeemablePoints + projectedPointsEarned,
-          lifetime_eligible_spend:
-            Number(customer.lifetime_eligible_spend || 0) + Math.max(0, eligibleSubtotal - redeemablePoints),
-        };
-
-        const { error: customerUpdateError } = await supabase
-          .from("customers")
-          .update(customerUpdates)
-          .eq("id", customer.id);
-
-        if (customerUpdateError) throw new Error(customerUpdateError.message);
-
-        if (redeemablePoints > 0) {
-          await supabase.from("customer_points_ledger").insert({
-            customer_id: customer.id,
-            entry_type: "redeemed",
-            points: -redeemablePoints,
-            note: `Redeemed on order ${orderNumber}`,
-          });
-        }
-
-        if (projectedPointsEarned > 0) {
-          await supabase.from("customer_points_ledger").insert({
-            customer_id: customer.id,
-            entry_type: "earned",
-            points: projectedPointsEarned,
-            note: `Earned on order ${orderNumber}`,
-          });
-        }
-      }
-
-      const printResult = await printOrderArtifacts({
-        orderNumber,
-        createdAt: String(orderRow.created_at),
-        customerNameForPrint: customer?.name || customerName || "Guest",
-        paymentMethodName:
-          paymentMethods.find((p) => p.id === selectedPaymentMethodId)?.name || "",
-        cartSnapshot: cart.map((item) => ({
-          ...item,
-          modifiers: [...item.modifiers],
-        })),
-      });
-
+      // At this point the sale is saved. Do not let printing, audit logs, or loyalty updates
+      // block the cashier or make it look like the order failed.
       setCart([]);
       setRedeemPointsInput("0");
       setCashReceivedInput("");
       resetLineBuilder();
-      setStatusMessage(`Order ${orderNumber} created | ${printResult.receiptStatus} | ${printResult.kitchenStatus} | ${printResult.stickerStatus}`);
+      setStatusMessage(`Order ${orderNumber} created. Sending receipt, kitchen ticket, and stickers...`);
       await refreshAll();
 
+      // Non-critical follow-up tasks. Each one is isolated so the order remains created.
+      const followUpWarnings: string[] = [];
+
+      try {
+        await recordAuditLog("order_created", "order", orderId, {
+          order_number: orderNumber,
+          total: cartGrandTotal,
+          subtotal: cartSubtotal,
+          tax_total: cartTaxTotal,
+          discount_total: redeemablePoints + appliedBillDiscount,
+          item_count: cartSnapshot.length,
+          payment_method_id: selectedPaymentMethodId,
+        });
+
+        if (appliedBillDiscount > 0) {
+          await recordAuditLog("discount_applied", "order", orderId, {
+            order_number: orderNumber,
+            bill_discount_mode: billDiscountMode,
+            bill_discount_percent: billDiscountPercentInput,
+            bill_discount_amount: appliedBillDiscount,
+          });
+        }
+      } catch (auditError) {
+        followUpWarnings.push("audit log skipped");
+        console.error("Audit log failed after order creation", auditError);
+      }
+
       if (customer) {
-        await loadCustomerDetailById(customer.id);
+        try {
+          const customerUpdates: Record<string, number> = {
+            reward_points: Number(customer.reward_points || 0) - redeemablePoints + projectedPointsEarned,
+            lifetime_eligible_spend:
+              Number(customer.lifetime_eligible_spend || 0) + Math.max(0, eligibleSubtotal - redeemablePoints),
+          };
+
+          const { error: customerUpdateError } = await supabase
+            .from("customers")
+            .update(customerUpdates)
+            .eq("id", customer.id);
+
+          if (customerUpdateError) throw new Error(customerUpdateError.message);
+
+          if (redeemablePoints > 0) {
+            await supabase.from("customer_points_ledger").insert({
+              customer_id: customer.id,
+              entry_type: "redeemed",
+              points: -redeemablePoints,
+              note: `Redeemed on order ${orderNumber}`,
+            });
+          }
+
+          if (projectedPointsEarned > 0) {
+            await supabase.from("customer_points_ledger").insert({
+              customer_id: customer.id,
+              entry_type: "earned",
+              points: projectedPointsEarned,
+              note: `Earned on order ${orderNumber}`,
+            });
+          }
+
+          await loadCustomerDetailById(customer.id);
+        } catch (customerError) {
+          followUpWarnings.push("customer points skipped");
+          console.error("Customer update failed after order creation", customerError);
+        }
       } else {
         clearLoadedCustomer();
         setCustomerName("");
         setCustomerPhone("");
       }
+
+      let printSummary = "Print not available";
+      try {
+        const printResult = await printOrderArtifacts({
+          orderNumber,
+          createdAt: String(orderRow.created_at),
+          customerNameForPrint: customer?.name || customerNameSnapshot || "Guest",
+          paymentMethodName: selectedPaymentMethodName,
+          cartSnapshot,
+        });
+
+        printSummary = `${printResult.receiptStatus} | ${printResult.kitchenStatus} | ${printResult.stickerStatus}`;
+      } catch (printError) {
+        printSummary = printError instanceof Error ? `Print failed: ${printError.message}` : "Print failed";
+        console.error("Print failed after order creation", printError);
+      }
+
+      const warningText = followUpWarnings.length > 0 ? ` | ${followUpWarnings.join(", ")}` : "";
+      setStatusMessage(`Order ${orderNumber} created | ${printSummary}${warningText}`);
+      await refreshAll();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not create order";
       setStatusMessage(message);
