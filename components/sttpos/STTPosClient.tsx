@@ -6097,19 +6097,6 @@ function openAdminVoidsWithPin() {
       .replace(/'/g, "&#039;");
   }
 
-  function waitForPrintQueue(ms: number) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
-  }
-
-  function escapeStickerHtml(value: string | number | null | undefined) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
   function buildSimpleStickerHtml(stickerRows: Array<{
     orderNumber: string;
     customerName: string;
@@ -6275,76 +6262,130 @@ function openAdminVoidsWithPin() {
     const electronPOS = (window as any).electronPOS;
     if (!electronPOS) {
       return {
-        receiptStatus: "Printer bridge not available",
-        kitchenStatus: "Printer bridge not available",
+        receiptStatus: "Printer bridge not available - open POS inside desktop app",
+        kitchenStatus: "Printer bridge not available - open POS inside desktop app",
         stickerCount: 0,
-        stickerStatus: "Printer bridge not available",
+        stickerStatus: "Printer bridge not available - open POS inside desktop app",
       };
     }
 
-    const logoDataUrl = "";
-    const cafePhone = "";
-    const cafeAddress = "";
     const cartForPrint = params.cartSnapshot && params.cartSnapshot.length > 0 ? params.cartSnapshot : cart;
 
-    const subtotalForPrint = cartForPrint.reduce((sum, item) => {
-      const modifierTotal = item.modifiers.reduce(
-        (modSum, mod) => modSum + Number(mod.price_delta || 0),
+    const printItems = cartForPrint.map((item) => {
+      const modifierTotal = (item.modifiers || []).reduce(
+        (sum, mod) => sum + Number(mod.price_delta || 0),
         0
       );
       const normalUnit = Number(item.base_price || 0) + modifierTotal;
-
-      let unit = normalUnit;
-      if (item.pricing_mode === "complimentary") unit = 0;
+      let unitPrice = normalUnit;
+      if (item.pricing_mode === "complimentary") unitPrice = 0;
       if (item.pricing_mode === "discounted") {
-        unit = Math.max(0, Number(item.discounted_unit_price || 0));
+        unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
       }
 
-      return sum + unit * Number(item.quantity || 0);
-    }, 0);
+      return {
+        name: String(item.name || "Item"),
+        quantity: Math.max(1, Number(item.quantity || 1)),
+        unit_price: unitPrice,
+        line_total: unitPrice * Math.max(1, Number(item.quantity || 1)),
+        modifiers: (item.modifiers || []).map((m) => String(m.name || "").trim()).filter(Boolean).join(" | "),
+        notes: item.notes || "",
+      };
+    });
 
-    const orderForPrint = {
-      order_number: params.orderNumber,
-      created_at: params.createdAt,
-      customer_name: params.customerNameForPrint,
-      payment_method_name: params.paymentMethodName,
-      subtotal: cartSubtotal || subtotalForPrint,
-      discount_total: redeemablePoints + appliedBillDiscount,
-      tax_total: cartTaxTotal,
-      total: cartGrandTotal || subtotalForPrint,
-      logo_data_url: logoDataUrl || null,
-      business_name: "Spill The Tea",
-      business_tagline: "Cafe • Coffee • Tea • Mocktails",
-      business_phone: cafePhone || null,
-      business_address: cafeAddress || null,
-      items: cartForPrint.map((item) => {
-        const modifierTotal = item.modifiers.reduce(
-          (sum, mod) => sum + Number(mod.price_delta || 0),
-          0
-        );
-        const normalUnit = Number(item.base_price || 0) + modifierTotal;
+    const subtotalForPrint = printItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const safeCustomerName = params.customerNameForPrint || "Guest";
+    const safePaymentMethod = params.paymentMethodName || "";
 
-        let unitPrice = normalUnit;
-        if (item.pricing_mode === "complimentary") unitPrice = 0;
-        if (item.pricing_mode === "discounted") {
-          unitPrice = Math.max(0, Number(item.discounted_unit_price || 0));
-        }
+    const rowsHtml = printItems
+      .map(
+        (item) => `
+          <div class="item-row">
+            <div class="item-main">
+              <div class="item-name">${escapeStickerHtml(item.name)}</div>
+              ${item.modifiers ? `<div class="item-sub">${escapeStickerHtml(item.modifiers)}</div>` : ""}
+              ${item.notes ? `<div class="item-sub">Note: ${escapeStickerHtml(item.notes)}</div>` : ""}
+            </div>
+            <div class="item-qty">x${item.quantity}</div>
+            <div class="item-total">${formatCurrency(Number(item.line_total || 0))}</div>
+          </div>`
+      )
+      .join("");
 
-        return {
-          product_name: item.name,
-          quantity: item.quantity,
-          unit_price: unitPrice,
-          line_total: unitPrice * Number(item.quantity || 0),
-          modifiers_text: item.modifiers.map((m) => m.name).join(", ") || null,
-          notes: item.notes || null,
-          product_type: "drink",
-        };
-      }),
-    };
+    const simpleReceiptHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page { margin: 0; size: 72mm auto; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 8px; width: 72mm; font-family: Arial, sans-serif; color: #000; }
+    .center { text-align: center; }
+    .title { font-size: 20px; font-weight: 900; }
+    .meta { font-size: 11px; margin-top: 2px; }
+    .divider { border-top: 1px dashed #000; margin: 8px 0; }
+    .item-row { display: flex; gap: 6px; padding: 4px 0; border-bottom: 1px dotted #bbb; }
+    .item-main { flex: 1; }
+    .item-name { font-size: 13px; font-weight: 800; }
+    .item-sub { font-size: 10px; }
+    .item-qty { width: 28px; text-align: right; font-size: 12px; font-weight: 700; }
+    .item-total { width: 62px; text-align: right; font-size: 12px; font-weight: 700; }
+    .total-row { display: flex; justify-content: space-between; font-size: 16px; font-weight: 900; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="center title">Spill The Tea</div>
+  <div class="center meta">${escapeStickerHtml(params.orderNumber)}</div>
+  <div class="center meta">${escapeStickerHtml(new Date(params.createdAt).toLocaleString())}</div>
+  <div class="meta">Customer: ${escapeStickerHtml(safeCustomerName)}</div>
+  <div class="meta">Payment: ${escapeStickerHtml(safePaymentMethod)}</div>
+  <div class="divider"></div>
+  ${rowsHtml}
+  <div class="divider"></div>
+  <div class="total-row"><span>Total</span><span>${formatCurrency(subtotalForPrint)}</span></div>
+</body>
+</html>`;
 
-    let receiptStatus = "Receipt auto print is off";
-    let kitchenStatus = "Kitchen auto print is off";
-    let stickerStatus = "Sticker auto print is off";
+    const simpleKitchenHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page { margin: 0; size: 72mm auto; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 8px; width: 72mm; font-family: Arial, sans-serif; color: #000; }
+    .center { text-align: center; }
+    .title { font-size: 22px; font-weight: 900; }
+    .meta { font-size: 13px; font-weight: 800; margin-top: 3px; }
+    .divider { border-top: 1px dashed #000; margin: 8px 0; }
+    .kitchen-item { padding: 7px 0; border-bottom: 1px dashed #000; }
+    .name { font-size: 18px; font-weight: 900; }
+    .qty { font-size: 16px; font-weight: 900; }
+    .sub { font-size: 12px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="center title">KITCHEN</div>
+  <div class="center meta">${escapeStickerHtml(params.orderNumber)}</div>
+  <div class="center meta">Customer: ${escapeStickerHtml(safeCustomerName)}</div>
+  <div class="divider"></div>
+  ${printItems
+    .map(
+      (item) => `
+        <div class="kitchen-item">
+          <div class="name">${escapeStickerHtml(item.name)}</div>
+          <div class="qty">Qty: ${item.quantity}</div>
+          ${item.modifiers ? `<div class="sub">${escapeStickerHtml(item.modifiers)}</div>` : ""}
+          ${item.notes ? `<div class="sub">Note: ${escapeStickerHtml(item.notes)}</div>` : ""}
+        </div>`
+    )
+    .join("")}
+</body>
+</html>`;
+
+    let receiptStatus = autoPrintReceipt ? "Receipt not sent" : "Receipt auto print is off";
+    let kitchenStatus = autoPrintKitchen ? "Kitchen not sent" : "Kitchen auto print is off";
+    let stickerStatus = autoPrintStickers ? "Stickers not sent" : "Sticker auto print is off";
     let stickerCount = 0;
 
     if (autoPrintReceipt) {
@@ -6352,59 +6393,48 @@ function openAdminVoidsWithPin() {
         receiptStatus = "Receipt printer not selected";
       } else {
         try {
-          const receiptResult = await electronPOS.printReceipt({
+          const result = await electronPOS.printReceipt({
             printerName: receiptKitchenPrinter,
-            html: fitThermalReceiptHtml(buildReceiptHtml(orderForPrint)),
+            html: `${simpleReceiptHtml}\n<!-- print-token-${params.orderNumber}-${Date.now()} -->`,
             printOptions: {
+              silent: true,
+              printBackground: true,
               margins: { marginType: "none" },
               pageSize: { width: 72000, height: 2000000 },
             },
           });
-
-          receiptStatus = receiptResult?.ok === false
-            ? `Receipt failed: ${receiptResult?.error || "Unknown error"}`
-            : "Receipt sent";
+          receiptStatus = result?.ok === false ? `Receipt failed: ${result?.error || "Unknown error"}` : "Receipt sent";
         } catch (error) {
           receiptStatus = error instanceof Error ? `Receipt failed: ${error.message}` : "Receipt failed";
         }
       }
     }
 
+    await waitForPrintQueue(900);
+
     if (autoPrintKitchen) {
       if (!receiptKitchenPrinter) {
         kitchenStatus = "Kitchen printer not selected";
       } else {
         try {
-          const kitchenHeaderHtml = `
-            <div style="text-align:center;font-family:Arial,sans-serif;margin:0 0 8px 0;padding:0 0 8px 0;border-bottom:1px dashed #000;">
-              <div style="font-size:18px;font-weight:800;">${params.orderNumber}</div>
-              <div style="font-size:14px;font-weight:700;">Customer: ${params.customerNameForPrint || "Guest"}</div>
-            </div>
-          `;
-
-          const kitchenResult = await electronPOS.printKitchen({
+          const result = await electronPOS.printKitchen({
             printerName: receiptKitchenPrinter,
-            html: fitThermalReceiptHtml(
-              buildKitchenHtml({
-                ...orderForPrint,
-                customer_name: params.customerNameForPrint || "Guest",
-                order_number: params.orderNumber,
-              }).replace("<body>", `<body>${kitchenHeaderHtml}`)
-            ),
+            html: `${simpleKitchenHtml}\n<!-- print-token-${params.orderNumber}-${Date.now()} -->`,
             printOptions: {
+              silent: true,
+              printBackground: true,
               margins: { marginType: "none" },
               pageSize: { width: 72000, height: 2000000 },
             },
           });
-
-          kitchenStatus = kitchenResult?.ok === false
-            ? `Kitchen failed: ${kitchenResult?.error || "Unknown error"}`
-            : "Kitchen sent";
+          kitchenStatus = result?.ok === false ? `Kitchen failed: ${result?.error || "Unknown error"}` : "Kitchen sent";
         } catch (error) {
           kitchenStatus = error instanceof Error ? `Kitchen failed: ${error.message}` : "Kitchen failed";
         }
       }
     }
+
+    await waitForPrintQueue(1200);
 
     if (autoPrintStickers) {
       if (!stickerPrinter) {
@@ -6413,88 +6443,41 @@ function openAdminVoidsWithPin() {
         const stickerRows = buildStickerRowsFromCartSnapshot({
           cartSnapshot: cartForPrint,
           orderNumber: params.orderNumber,
-          customerNameForPrint: params.customerNameForPrint,
-        });
+          customerNameForPrint: safeCustomerName,
+        }).slice(0, MAX_STICKERS_PER_ORDER);
 
         if (stickerRows.length === 0) {
-          stickerStatus = "No item stickers needed";
+          stickerStatus = "No sticker items found";
         } else {
-          try {
-            const normalizedStickerRows = stickerRows
-              .map((row) => ({
-                ...row,
-                orderNumber: params.orderNumber,
-                customerName: params.customerNameForPrint || "Guest",
-                drinkName: String(row.drinkName || "").trim(),
-              }))
-              .filter((row) => row.drinkName)
-              .slice(0, MAX_STICKERS_PER_ORDER);
+          const failures: string[] = [];
+          for (let index = 0; index < stickerRows.length; index += 1) {
+            const row = stickerRows[index];
+            try {
+              const result = await electronPOS.printStickers({
+                printerName: stickerPrinter,
+                html: `${buildSingleStickerHtml(row)}\n<!-- sticker-token-${params.orderNumber}-${index}-${Date.now()} -->`,
+                printOptions: {
+                  silent: true,
+                  printBackground: true,
+                  margins: { marginType: "none" },
+                  pageSize: { width: 50800, height: 25400 },
+                },
+              });
 
-            if (normalizedStickerRows.length === 0) {
-              stickerStatus = "No valid sticker items found";
-              return {
-                receiptStatus,
-                kitchenStatus,
-                stickerCount: 0,
-                stickerStatus,
-              };
-            }
-
-            let sentCount = 0;
-            const failedLabels: string[] = [];
-
-            await waitForPrintQueue(2500);
-
-            for (let index = 0; index < normalizedStickerRows.length; index += 1) {
-              const row = normalizedStickerRows[index];
-              const labelName = `${row.drinkName} ${row.countLabel}`;
-              let printed = false;
-              let lastError = "";
-
-              for (let attempt = 1; attempt <= 3; attempt += 1) {
-                try {
-                  const stickerResult = await electronPOS.printStickers({
-                    printerName: stickerPrinter,
-                    html: buildSingleStickerHtml(row),
-                    printOptions: {
-                      silent: true,
-                      printBackground: true,
-                      margins: { marginType: "none" },
-                      pageSize: { width: 50800, height: 25400 },
-                    },
-                  });
-
-                  if (stickerResult?.ok === false) {
-                    lastError = stickerResult?.error || "Unknown error";
-                  } else {
-                    printed = true;
-                    sentCount += 1;
-                    break;
-                  }
-                } catch (error) {
-                  lastError = error instanceof Error ? error.message : "Unknown error";
-                }
-
-                await waitForPrintQueue(1800);
+              if (result?.ok === false) {
+                failures.push(`${row.drinkName}: ${result?.error || "Unknown error"}`);
+              } else {
+                stickerCount += 1;
               }
-
-              if (!printed) {
-                failedLabels.push(`${labelName}${lastError ? ` (${lastError})` : ""}`);
-              }
-
-              await waitForPrintQueue(1800);
+            } catch (error) {
+              failures.push(error instanceof Error ? `${row.drinkName}: ${error.message}` : `${row.drinkName}: failed`);
             }
-
-            stickerCount = sentCount;
-
-            if (failedLabels.length > 0) {
-              stickerStatus = `${sentCount}/${normalizedStickerRows.length} sticker(s) sent. Failed: ${failedLabels.join("; ")}`;
-            } else {
-              stickerStatus = `${sentCount} sticker(s) sent`;
-            }
-          } catch (error) {
-            stickerStatus = error instanceof Error ? `Sticker failed: ${error.message}` : "Sticker failed";
+            await waitForPrintQueue(1400);
           }
+
+          stickerStatus = failures.length > 0
+            ? `${stickerCount}/${stickerRows.length} sticker(s) sent. Failed: ${failures.join("; ")}`
+            : `${stickerCount} sticker(s) sent`;
         }
       }
     }
