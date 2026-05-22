@@ -842,9 +842,6 @@ const MAX_STICKERS_PER_ORDER = 40;
 
 async function getNextDailyOrderNumber() {
   const now = new Date();
-
-  // Use YYMMDD in the order number so every date gets a unique prefix.
-  // Example: May 22, 2026 => STT-260522-0001
   const yy = String(now.getFullYear()).slice(-2);
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
@@ -4423,26 +4420,32 @@ function openAdminVoidsWithPin() {
 
   function resetNewCustomerTabForm() {
     setSelectedCustomerTabId(null);
+    setCart([]);
     setCustomerName("");
     setCustomerPhone("");
     setCurrentCustomer(null);
     setTabTableName("");
     setTabGuestCount("1");
     setTabNotes("");
-    setStatusMessage("Ready to open a new customer tab. Add items to cart, then click Open Tab With Current Cart.");
+    setRedeemPointsInput("0");
+    setProductSearch("");
+    setSelectedPosCategoryId("all");
+    setViewMode("pos");
+    setStatusMessage("New customer tab started. Add items to cart, then click Open Tab With Current Cart.");
   }
 
   function getNextTabNumber() {
     const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const month = String(now.getMonth() + 1).padStart(2, "0");
     const dd = String(now.getDate()).padStart(2, "0");
     const hh = String(now.getHours()).padStart(2, "0");
     const mm = String(now.getMinutes()).padStart(2, "0");
     const ss = String(now.getSeconds()).padStart(2, "0");
     const random = Math.random().toString(36).slice(2, 5).toUpperCase();
 
-    // Use time + random so a new customer tab can always be created,
-    // even if older test tabs were voided/deleted but their tab_number still exists.
-    return `TAB-${dd}-${hh}${mm}${ss}-${random}`;
+    // Use full date + time + random so a new customer tab can always be created.
+    return `TAB-${yy}${month}${dd}-${hh}${mm}${ss}-${random}`;
   }
 
   function buildTabRoundCartSnapshot(tabItems: CustomerTabItem[], tab: CustomerTab): CartItem[] {
@@ -9017,11 +9020,17 @@ function openAdminVoidsWithPin() {
                         </button>
                         <button
                           type="button"
-                          onClick={createCustomerTabFromCart}
+                          onClick={() => {
+                            if (selectedCustomerTabId) {
+                              addCartItemsToTab();
+                            } else {
+                              createCustomerTabFromCart();
+                            }
+                          }}
                           disabled={saving || cart.length === 0}
                           className="rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
                         >
-                          Open Tab With Current Cart
+                          {selectedCustomerTabId ? "Add Current Cart To Selected Tab" : "Open Tab With Current Cart"}
                         </button>
                       </div>
                       {customerTabs.length > 0 ? (
@@ -9085,13 +9094,22 @@ function openAdminVoidsWithPin() {
                   Use tabs for customers who keep ordering during their visit. Add rounds over time, then close and collect one final bill when they leave.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={loadCustomerTabs}
-                className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
-              >
-                Refresh Tabs
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={resetNewCustomerTabForm}
+                  className="rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-600"
+                >
+                  New Customer Tab
+                </button>
+                <button
+                  type="button"
+                  onClick={loadCustomerTabs}
+                  className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                >
+                  Refresh Tabs
+                </button>
+              </div>
             </div>
 
             <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
@@ -9182,7 +9200,16 @@ function openAdminVoidsWithPin() {
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => { setSelectedCustomerTabId(tab.id); setViewMode("pos"); }}
+                          onClick={() => {
+                            setSelectedCustomerTabId(tab.id);
+                            setCart([]);
+                            setCustomerName(tab.customer_name || "");
+                            setCustomerPhone(tab.customer_phone || "");
+                            setTabTableName(tab.table_name || "");
+                            setTabGuestCount(String(tab.guest_count || 1));
+                            setStatusMessage(`Adding more items to ${tab.tab_number}. Add products, then click Add Current Cart To Selected Tab.`);
+                            setViewMode("pos");
+                          }}
                           className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-50"
                         >
                           Add More Items
