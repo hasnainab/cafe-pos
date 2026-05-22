@@ -13272,4 +13272,3 @@ function openAdminVoidsWithPin() {
     </main>
   );
 }
-
