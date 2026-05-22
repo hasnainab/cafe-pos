@@ -842,8 +842,13 @@ const MAX_STICKERS_PER_ORDER = 40;
 
 async function getNextDailyOrderNumber() {
   const now = new Date();
+
+  // Use YYMMDD in the order number so every date gets a unique prefix.
+  // Example: May 22, 2026 => STT-260522-0001
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
-  const prefix = `STT-${dd}-`;
+  const prefix = `STT-${yy}${mm}${dd}-`;
 
   const startOfDay = new Date(now);
   startOfDay.setHours(0, 0, 0, 0);
