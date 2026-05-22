@@ -172,7 +172,7 @@ type CustomerTabItem = {
   added_at: string;
 };
 
-type ViewMode = "pos" | "active" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing" | "voids";
+type ViewMode = "pos" | "active" | "tabs" | "setup" | "inventory" | "audit" | "recipes" | "customers" | "campaigns" | "history" | "profitability" | "reports" | "dayClose" | "reorder" | "recipePricing" | "voids";
 
 type ProductForm = {
   id: number | null;
@@ -4416,6 +4416,10 @@ function openAdminVoidsWithPin() {
     }
   }
 
+  useEffect(() => {
+    if (!authChecked || !staffProfile || viewMode !== "tabs") return;
+    loadCustomerTabs();
+  }, [authChecked, staffProfile, viewMode]);
 
   function resetNewCustomerTabForm() {
     setSelectedCustomerTabId(null);
@@ -4654,7 +4658,7 @@ function openAdminVoidsWithPin() {
       setCurrentCustomer(null);
 
       await loadCustomerTabs();
-      setViewMode("pos");
+      setViewMode("tabs");
       setStatusMessage(`Opened new customer tab ${freshTab.tab_number}`);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not open customer tab");
@@ -4843,7 +4847,7 @@ function openAdminVoidsWithPin() {
       setCart([]);
       resetLineBuilder();
       setSelectedCustomerTabId(Number(targetTabId));
-      setViewMode("pos");
+      setViewMode("tabs");
       setStatusMessage(`${isNewTab ? "Customer tab opened" : "Items added to tab"} - Round ${roundNumber} (${normalizedInsertedItems.length} item${normalizedInsertedItems.length === 1 ? "" : "s"}) | ${printMessage}`);
 
       // Refresh from database after optimistic display. If refresh fails, the optimistic rows still showed and the error is visible.
@@ -4851,7 +4855,7 @@ function openAdminVoidsWithPin() {
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not add items to tab");
       if (isNewTab) {
-        setViewMode("pos");
+        setViewMode("tabs");
       }
     } finally {
       setSaving(false);
@@ -4976,7 +4980,7 @@ function openAdminVoidsWithPin() {
         .update({
           status: "voided",
           closed_at: new Date().toISOString(),
-          notes: `${tab.notes || ""} | Cancelled from POS running-bill screen.`.trim(),
+          notes: `${tab.notes || ""} | Cancelled from POS Customer Tabs screen.`.trim(),
         })
         .eq("id", Number(tab.id));
 
@@ -8386,6 +8390,7 @@ function openAdminVoidsWithPin() {
               <div className="flex flex-wrap items-center gap-2">
                 {navButton("pos", "POS")}
                 {navButton("active", "Active")}
+                {navButton("tabs", "Customer Tabs")}
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
                 {canViewInventory ? navButton("audit", "Stock Audit") : null}
                 {navButton("history", "History")}
@@ -8980,6 +8985,70 @@ function openAdminVoidsWithPin() {
                       {saving ? "Saving..." : "Create Order"}
                     </button>
 
+                    <div className="rounded-2xl border border-pink-200 bg-pink-50 p-3">
+                      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-pink-700">Customer Open Tab</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          value={tabTableName}
+                          onChange={(e) => setTabTableName(e.target.value)}
+                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          placeholder="Table / area"
+                        />
+                        <input
+                          value={tabGuestCount}
+                          onChange={(e) => setTabGuestCount(e.target.value)}
+                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          placeholder="Guests"
+                        />
+                      </div>
+                      <input
+                        value={tabNotes}
+                        onChange={(e) => setTabNotes(e.target.value)}
+                        className="mt-2 w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                        placeholder="Optional tab note"
+                      />
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={resetNewCustomerTabForm}
+                          className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700"
+                        >
+                          New Customer Tab
+                        </button>
+                        <button
+                          type="button"
+                          onClick={createCustomerTabFromCart}
+                          disabled={saving || cart.length === 0}
+                          className="rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
+                        >
+                          Open Tab With Current Cart
+                        </button>
+                      </div>
+                      {customerTabs.length > 0 ? (
+                        <div className="mt-2 grid gap-2">
+                          <select
+                            value={selectedCustomerTabId ?? ""}
+                            onChange={(e) => setSelectedCustomerTabId(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
+                          >
+                            <option value="">Select existing open tab</option>
+                            {customerTabs.map((tab) => (
+                              <option key={tab.id} value={tab.id}>
+                                {tab.tab_number} - {tab.customer_name || tab.table_name || "Guest"} - {formatCurrency(getTabGrandTotal(tab.id))}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => addCartItemsToTab()}
+                            disabled={saving || cart.length === 0 || !selectedCustomerTabId}
+                            className="w-full rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 disabled:opacity-50"
+                          >
+                            Add Current Cart To Selected Tab
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </section>
               </section>
@@ -9006,6 +9075,141 @@ function openAdminVoidsWithPin() {
         )}
 
 
+        {viewMode === "tabs" && (
+          <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-500">Running Bills</p>
+                <h2 className="mt-1 text-2xl font-semibold text-rose-950">Customer Open Tabs</h2>
+                <p className="mt-1 max-w-3xl text-sm text-rose-700/70">
+                  Use tabs for customers who keep ordering during their visit. Add rounds over time, then close and collect one final bill when they leave.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadCustomerTabs}
+                className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+              >
+                Refresh Tabs
+              </button>
+            </div>
+
+            <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="mb-2 text-sm font-bold text-amber-900">Payment method for closing tabs</div>
+              <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-5">
+                {paymentMethods.filter((method) => method.active !== false).map((method) => {
+                  const selected = selectedPaymentMethodId === method.id;
+                  return (
+                    <button
+                      key={`tab-pay-${method.id}`}
+                      type="button"
+                      onClick={() => setSelectedPaymentMethodId(method.id)}
+                      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+                        selected ? "border-emerald-500 bg-emerald-500 text-white" : "border-amber-200 bg-white text-amber-900"
+                      }`}
+                    >
+                      {method.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {customerTabs.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 p-6 text-sm text-rose-700/70">
+                  <div className="font-semibold text-rose-900">No open customer tabs are loaded.</div>
+                  <div className="mt-2">Build a cart in POS, then click Open Tab With Current Cart.</div>
+                  <div className="mt-2 text-xs">
+                    If you already opened a tab, click Refresh Tabs and read the pink status message at the top. If it says a table is missing or permission is denied, run the customer tabs SQL in Supabase again.
+                  </div>
+                </div>
+              ) : (
+                customerTabs.map((tab) => {
+                  const tabItems = getTabItems(tab.id);
+                  const subtotal = getTabSubtotal(tab.id);
+                  const taxTotal = getTabTaxTotal(tab.id);
+                  const grandTotal = getTabGrandTotal(tab.id);
+                  const roundNumbers = Array.from(new Set(tabItems.map((item) => item.round_number))).sort((a, b) => a - b);
+
+                  return (
+                    <div key={tab.id} className="rounded-3xl border border-pink-200 bg-white p-4 shadow-sm">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-xl font-bold text-rose-950">{tab.tab_number}</h3>
+                            <span className="rounded-full bg-pink-100 px-3 py-1 text-xs font-semibold text-pink-700">Open</span>
+                          </div>
+                          <div className="mt-1 text-sm text-rose-700/70">
+                            {tab.customer_name || "Guest"} {tab.table_name ? `- ${tab.table_name}` : ""} - opened {formatTime(tab.opened_at)}
+                          </div>
+                          {tab.notes ? <div className="mt-1 text-xs text-rose-600">Note: {tab.notes}</div> : null}
+                        </div>
+                        <div className="min-w-[220px] rounded-2xl bg-rose-50 p-3 text-sm">
+                          <div className="flex justify-between"><span>Subtotal</span><strong>{formatCurrency(subtotal)}</strong></div>
+                          <div className="flex justify-between"><span>Tax</span><strong>{formatCurrency(taxTotal)}</strong></div>
+                          <div className="mt-2 flex justify-between border-t border-rose-200 pt-2 text-base"><span>Total</span><strong>{formatCurrency(grandTotal)}</strong></div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {tabItems.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            This tab is open, but no order rounds are loaded yet. Add items from the POS screen, then click Add Current Cart To Selected Tab. If you already added items, click Refresh Tabs and check the pink status message at the top for a database error.
+                          </div>
+                        ) : (
+                          roundNumbers.map((round) => (
+                            <div key={`${tab.id}-round-${round}`} className="rounded-2xl border border-rose-100 bg-rose-50 p-3">
+                              <div className="mb-2 text-xs font-bold uppercase tracking-wide text-rose-500">Round {round}</div>
+                              <div className="space-y-2">
+                                {tabItems.filter((item) => item.round_number === round).map((item) => (
+                                  <div key={item.id} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
+                                    <div>
+                                      <strong>{item.product_name} x {item.quantity}</strong>
+                                      <div className="text-xs text-rose-700/60">
+                                        {item.modifiers_text ? `Mods: ${item.modifiers_text}` : ""} {item.notes ? `Note: ${item.notes}` : ""}
+                                      </div>
+                                    </div>
+                                    <strong>{formatCurrency(item.line_total)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedCustomerTabId(tab.id); setViewMode("pos"); }}
+                          className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-50"
+                        >
+                          Add More Items
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => closeCustomerTab(tab)}
+                          disabled={tabClosingId === tab.id}
+                          className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          {tabClosingId === tab.id ? "Closing..." : "Close & Pay Final Bill"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => voidCustomerTab(tab)}
+                          className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          Cancel Tab
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        )}
 
 {viewMode === "history" && (
           <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-sm">
