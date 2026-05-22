@@ -8390,7 +8390,7 @@ function openAdminVoidsWithPin() {
               <div className="flex flex-wrap items-center gap-2">
                 {navButton("pos", "POS")}
                 {navButton("active", "Active")}
-                {navButton("tabs", "Customer Tabs")}
+                
                 {canViewInventory ? navButton("inventory", "Inventory/Stock") : null}
                 {canViewInventory ? navButton("audit", "Stock Audit") : null}
                 {navButton("history", "History")}
@@ -8984,72 +8984,6 @@ function openAdminVoidsWithPin() {
                     >
                       {saving ? "Saving..." : "Create Order"}
                     </button>
-
-                    <div className="rounded-2xl border border-pink-200 bg-pink-50 p-3">
-                      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-pink-700">Customer Open Tab</div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          value={tabTableName}
-                          onChange={(e) => setTabTableName(e.target.value)}
-                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
-                          placeholder="Table / area"
-                        />
-                        <input
-                          value={tabGuestCount}
-                          onChange={(e) => setTabGuestCount(e.target.value)}
-                          className="rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
-                          placeholder="Guests"
-                        />
-                      </div>
-                      <input
-                        value={tabNotes}
-                        onChange={(e) => setTabNotes(e.target.value)}
-                        className="mt-2 w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
-                        placeholder="Optional tab note"
-                      />
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={resetNewCustomerTabForm}
-                          className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700"
-                        >
-                          New Customer Tab
-                        </button>
-                        <button
-                          type="button"
-                          onClick={createCustomerTabFromCart}
-                          disabled={saving || cart.length === 0}
-                          className="rounded-xl bg-pink-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
-                        >
-                          Open Tab With Current Cart
-                        </button>
-                      </div>
-                      {customerTabs.length > 0 ? (
-                        <div className="mt-2 grid gap-2">
-                          <select
-                            value={selectedCustomerTabId ?? ""}
-                            onChange={(e) => setSelectedCustomerTabId(e.target.value ? Number(e.target.value) : null)}
-                            className="w-full rounded-xl border border-pink-200 bg-white px-3 py-2 text-xs"
-                          >
-                            <option value="">Select existing open tab</option>
-                            {customerTabs.map((tab) => (
-                              <option key={tab.id} value={tab.id}>
-                                {tab.tab_number} - {tab.customer_name || tab.table_name || "Guest"} - {formatCurrency(getTabGrandTotal(tab.id))}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => addCartItemsToTab()}
-                            disabled={saving || cart.length === 0 || !selectedCustomerTabId}
-                            className="w-full rounded-xl border border-pink-300 bg-white px-4 py-2 text-sm font-semibold text-pink-700 disabled:opacity-50"
-                          >
-                            Add Current Cart To Selected Tab
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
                 </section>
               </section>
             </div>
@@ -9080,7 +9014,7 @@ function openAdminVoidsWithPin() {
             <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-500">Running Bills</p>
-                <h2 className="mt-1 text-2xl font-semibold text-rose-950">Customer Open Tabs</h2>
+                
                 <p className="mt-1 max-w-3xl text-sm text-rose-700/70">
                   Use tabs for customers who keep ordering during their visit. Add rounds over time, then close and collect one final bill when they leave.
                 </p>
@@ -13272,4 +13206,7 @@ function openAdminVoidsWithPin() {
     </main>
   );
 }
+
+
+
 
