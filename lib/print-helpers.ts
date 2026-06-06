@@ -39,233 +39,192 @@ export function money(v: number) {
   return `Rs ${Number(v || 0).toFixed(0)}`;
 }
 
-export function buildReceiptHtml(order: PosOrder, logoDataUrl?: string) {
+function safeNumber(value: number | null | undefined) {
+  return Number.isFinite(Number(value || 0)) ? Number(value || 0) : 0;
+}
+
+export function buildReceiptHtml(order: PosOrder) {
   const businessName = escapeHtml(order.business_name || "Spill The Tea");
   const businessTagline = escapeHtml(order.business_tagline || "Cafe • Coffee • Tea • Mocktails");
   const businessPhone = escapeHtml(order.business_phone || "");
   const businessAddress = escapeHtml(order.business_address || "");
-  const logo = logoDataUrl || order.logo_data_url || "";
+  const subtotal = safeNumber(order.subtotal);
+  const discount = safeNumber(order.discount_total);
+  const tax = safeNumber(order.tax_total);
+  const total = safeNumber(order.total);
 
-  const items = order.items
+  const itemRows = (order.items || [])
     .map((item) => {
-      const quantity = Number(item.quantity || 0);
-      const unitPrice = Number(item.unit_price || 0);
-      const lineTotal =
-        item.line_total != null ? Number(item.line_total || 0) : quantity * unitPrice;
+      const quantity = safeNumber(item.quantity);
+      const unitPrice = safeNumber(item.unit_price);
+      const lineTotal = item.line_total != null ? safeNumber(item.line_total) : quantity * unitPrice;
 
       return `
-        <tr class="item-row">
-          <td class="item-name-cell">
+        <div class="item">
+          <div class="item-main">
             <div class="item-name">${escapeHtml(item.product_name)}</div>
-            <div class="item-meta">Qty ${quantity}${item.unit_price != null ? ` • ${money(unitPrice)} each` : ""}</div>
-            ${item.modifiers_text ? `<div class="item-sub">Modifier: ${escapeHtml(item.modifiers_text)}</div>` : ""}
-            ${item.notes ? `<div class="item-sub">Note: ${escapeHtml(item.notes)}</div>` : ""}
-          </td>
-          <td class="amount-cell">${money(lineTotal)}</td>
-        </tr>
-      `;
+            <div class="item-amount">${money(lineTotal)}</div>
+          </div>
+          <div class="item-meta">Qty: ${quantity}${item.unit_price != null ? ` x ${money(unitPrice)}` : ""}</div>
+          ${item.modifiers_text ? `<div class="item-sub">Modifier: ${escapeHtml(item.modifiers_text)}</div>` : ""}
+          ${item.notes ? `<div class="item-sub">Note: ${escapeHtml(item.notes)}</div>` : ""}
+        </div>`;
     })
     .join("");
 
-  return `
-  <html>
-    <head>
-      <meta charset="utf-8" />
-      <style>
-        @page { margin: 0; }
-        html, body {
-          margin: 0;
-          padding: 0;
-          width: 3in;
-          font-family: Arial, sans-serif;
-          color: #000;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-        body {
-          padding: 0.10in 0.10in 0.12in;
-          font-size: 11px;
-          line-height: 1.25;
-        }
-        .center { text-align: center; }
-        .logo {
-          max-width: 1.5in;
-          max-height: 0.65in;
-          object-fit: contain;
-          display: block;
-          margin: 0 auto 6px;
-        }
-        .brand {
-          font-size: 18px;
-          font-weight: 800;
-          line-height: 1.05;
-          margin-bottom: 2px;
-        }
-        .tagline {
-          font-size: 10px;
-          color: #333;
-          margin-bottom: 6px;
-        }
-        .contact {
-          font-size: 9px;
-          color: #333;
-          line-height: 1.3;
-          margin-bottom: 8px;
-        }
-        .rule {
-          border-top: 1px dashed #000;
-          margin: 8px 0;
-        }
-        .meta-row {
-          display: flex;
-          justify-content: space-between;
-          gap: 8px;
-          margin-bottom: 3px;
-          font-size: 10px;
-        }
-        .meta-label {
-          color: #333;
-          min-width: 70px;
-        }
-        .meta-value {
-          text-align: right;
-          font-weight: 700;
-          flex: 1;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-top: 4px;
-        }
-        .head-row td {
-          font-size: 10px;
-          font-weight: 700;
-          padding: 0 0 4px;
-        }
-        .head-row td:last-child {
-          text-align: right;
-        }
-        .item-row td {
-          vertical-align: top;
-          padding: 4px 0;
-        }
-        .item-name {
-          font-size: 12px;
-          font-weight: 700;
-          line-height: 1.2;
-        }
-        .item-meta {
-          font-size: 10px;
-          color: #333;
-          margin-top: 1px;
-        }
-        .item-sub {
-          font-size: 9px;
-          color: #444;
-          margin-top: 2px;
-          line-height: 1.2;
-        }
-        .amount-cell {
-          text-align: right;
-          white-space: nowrap;
-          font-weight: 700;
-          padding-left: 8px;
-        }
-        .totals {
-          margin-top: 8px;
-        }
-        .total-row {
-          display: flex;
-          justify-content: space-between;
-          gap: 8px;
-          margin-bottom: 4px;
-          font-size: 11px;
-        }
-        .grand-total {
-          font-size: 14px;
-          font-weight: 800;
-          margin-top: 4px;
-        }
-        .payment {
-          margin-top: 6px;
-          font-size: 11px;
-          font-weight: 700;
-        }
-        .footer-note {
-          margin-top: 10px;
-          text-align: center;
-          font-size: 10px;
-          color: #333;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="center">
-        ${logo ? `<img class="logo" src="${logo}" alt="Logo" />` : ""}
-        <div class="brand">${businessName}</div>
-        <div class="tagline">${businessTagline}</div>
-        ${
-          businessPhone || businessAddress
-            ? `<div class="contact">
-                ${businessPhone ? `<div>${businessPhone}</div>` : ""}
-                ${businessAddress ? `<div>${businessAddress}</div>` : ""}
-              </div>`
-            : ""
-        }
-      </div>
-
-      <div class="rule"></div>
-
-      <div class="meta-row">
-        <div class="meta-label">Order No</div>
-        <div class="meta-value">${escapeHtml(order.order_number)}</div>
-      </div>
-      <div class="meta-row">
-        <div class="meta-label">Date/Time</div>
-        <div class="meta-value">${escapeHtml(new Date(order.created_at).toLocaleString())}</div>
-      </div>
-      ${
-        order.customer_name
-          ? `<div class="meta-row">
-              <div class="meta-label">Customer</div>
-              <div class="meta-value">${escapeHtml(order.customer_name || "")}</div>
-            </div>`
-          : ""
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @page { size: 80mm auto; margin: 0; }
+      * {
+        box-sizing: border-box;
+        color: #000000 !important;
+        background: #ffffff !important;
+        text-shadow: none !important;
+        box-shadow: none !important;
       }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 80mm;
+        min-width: 80mm;
+        max-width: 80mm;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+        line-height: 1.25;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body {
+        padding: 4mm 4mm 5mm;
+      }
+      .center { text-align: center; }
+      .brand {
+        font-size: 21px;
+        font-weight: 900;
+        line-height: 1.05;
+        margin: 0 0 2px;
+      }
+      .tagline {
+        font-size: 10px;
+        font-weight: 700;
+        margin-bottom: 3px;
+      }
+      .contact {
+        font-size: 9px;
+        line-height: 1.2;
+        margin-bottom: 5px;
+      }
+      .rule {
+        border-top: 1px dashed #000000;
+        height: 1px;
+        margin: 6px 0;
+      }
+      .meta-line {
+        font-size: 10px;
+        margin: 2px 0;
+        font-weight: 700;
+      }
+      .item {
+        padding: 4px 0;
+        border-bottom: 1px dashed #000000;
+        break-inside: avoid;
+      }
+      .item-main {
+        display: table;
+        width: 100%;
+        table-layout: fixed;
+      }
+      .item-name {
+        display: table-cell;
+        width: 68%;
+        font-size: 12px;
+        font-weight: 900;
+        vertical-align: top;
+        word-break: break-word;
+      }
+      .item-amount {
+        display: table-cell;
+        width: 32%;
+        text-align: right;
+        font-size: 12px;
+        font-weight: 900;
+        vertical-align: top;
+        white-space: nowrap;
+      }
+      .item-meta, .item-sub {
+        font-size: 10px;
+        font-weight: 700;
+        margin-top: 1px;
+      }
+      .totals { margin-top: 6px; }
+      .total-row {
+        display: table;
+        width: 100%;
+        table-layout: fixed;
+        font-size: 12px;
+        margin: 3px 0;
+        font-weight: 800;
+      }
+      .total-row .label,
+      .total-row .value {
+        display: table-cell;
+        vertical-align: top;
+      }
+      .total-row .value {
+        text-align: right;
+        white-space: nowrap;
+      }
+      .grand-total {
+        font-size: 16px;
+        font-weight: 900;
+        padding-top: 3px;
+        border-top: 1px solid #000000;
+        margin-top: 5px;
+      }
+      .payment {
+        margin-top: 7px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .footer-note {
+        margin-top: 8px;
+        text-align: center;
+        font-size: 10px;
+        font-weight: 800;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="center">
+      <div class="brand">${businessName}</div>
+      <div class="tagline">${businessTagline}</div>
+      ${businessPhone || businessAddress ? `<div class="contact">${businessPhone ? `<div>${businessPhone}</div>` : ""}${businessAddress ? `<div>${businessAddress}</div>` : ""}</div>` : ""}
+    </div>
 
-      <div class="rule"></div>
+    <div class="rule"></div>
 
-      <table>
-        <tr class="head-row">
-          <td>Item</td>
-          <td>Amount</td>
-        </tr>
-        ${items}
-      </table>
+    <div class="meta-line">Order: ${escapeHtml(order.order_number)}</div>
+    <div class="meta-line">Date: ${escapeHtml(new Date(order.created_at).toLocaleString())}</div>
+    ${order.customer_name ? `<div class="meta-line">Customer: ${escapeHtml(order.customer_name || "")}</div>` : ""}
 
-      <div class="rule"></div>
+    <div class="rule"></div>
 
-      <div class="totals">
-        <div class="total-row">
-          <div>Subtotal</div>
-          <div>${money(order.subtotal)}</div>
-        </div>
-        ${Number(order.discount_total || 0) > 0 ? `<div class="total-row"><div>Discount</div><div>- ${money(order.discount_total || 0)}</div></div>` : ""}
-        <div class="total-row">
-          <div>Tax</div>
-          <div>${money(order.tax_total)}</div>
-        </div>
-        <div class="total-row grand-total">
-          <div>Total</div>
-          <div>${money(order.total)}</div>
-        </div>
-      </div>
+    ${itemRows || `<div class="item"><div class="item-name">No items</div></div>`}
 
-      <div class="payment">Payment: ${escapeHtml(order.payment_method_name || "-")}</div>
+    <div class="totals">
+      <div class="total-row"><div class="label">Subtotal</div><div class="value">${money(subtotal)}</div></div>
+      ${discount > 0 ? `<div class="total-row"><div class="label">Discount</div><div class="value">- ${money(discount)}</div></div>` : ""}
+      <div class="total-row"><div class="label">Tax</div><div class="value">${money(tax)}</div></div>
+      <div class="total-row grand-total"><div class="label">Total</div><div class="value">${money(total)}</div></div>
+    </div>
 
-      <div class="footer-note">Thank you for visiting Spill The Tea</div>
-    </body>
-  </html>`;
+    <div class="payment">Payment: ${escapeHtml(order.payment_method_name || "-")}</div>
+    <div class="footer-note">Thank you for visiting Spill The Tea</div>
+  </body>
+</html>`;
 }
 
 export function buildKitchenHtml(order: PosOrder, logoDataUrl?: string) {
@@ -488,6 +447,7 @@ export function buildStickerHtml(stickers: DrinkStickerInput[], logoDataUrl?: st
     <body>${pages}</body>
   </html>`;
 }
+
 export function expandDrinkStickers(order: {
   order_number: string;
   customer_name?: string | null;
