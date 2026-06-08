@@ -6354,7 +6354,10 @@ function openAdminVoidsWithPin() {
       };
     });
 
-    const subtotalForPrint = printItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0);`r`n    const discountForPrint = Number((redeemablePoints || 0) + (appliedBillDiscount || 0));`r`n    const taxForPrint = Number(cartTaxTotal || 0);`r`n    const grandTotalForPrint = Math.max(0, subtotalForPrint - discountForPrint + taxForPrint);
+    const subtotalForPrint = printItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const discountForPrint = Number((redeemablePoints || 0) + (appliedBillDiscount || 0));
+    const taxForPrint = Number(cartTaxTotal || 0);
+    const grandTotalForPrint = Math.max(0, subtotalForPrint - discountForPrint + taxForPrint);
     const safeCustomerName = params.customerNameForPrint || "Guest";
     const safePaymentMethod = params.paymentMethodName || "";
 
@@ -6403,7 +6406,8 @@ function openAdminVoidsWithPin() {
   <div class="divider"></div>
   ${rowsHtml}
   <div class="divider"></div>
-  <div class="total-row"><span>Subtotal</span><span>${formatCurrency(subtotalForPrint)}</span></div>`r`n  ${discountForPrint > 0 ? `<div class="total-row"><span>Discount</span><span>- ${formatCurrency(discountForPrint)}</span></div>` : ""}`r`n  <div class="total-row"><span>Sales Tax</span><span>${formatCurrency(taxForPrint)}</span></div>`r`n  <div class="total-row"><span>Total</span><span>${formatCurrency(grandTotalForPrint)}</span></div>
+  <div class="total-row"><span>Subtotal</span><span>${formatCurrency(subtotalForPrint)}</span></div>
+  ${discountForPrint > 0 ? `<div class="total-row"><span>Discount</span><span>- ${formatCurrency(discountForPrint)}</span></div>` : ""}`r`n  <div class="total-row"><span>Sales Tax</span><span>${formatCurrency(taxForPrint)}</span></div>`r`n  <div class="total-row"><span>Total</span><span>${formatCurrency(grandTotalForPrint)}</span></div>
 </body>
 </html>`;
 
@@ -13091,4 +13095,5 @@ function openAdminVoidsWithPin() {
     </main>
   );
 }
+
 
