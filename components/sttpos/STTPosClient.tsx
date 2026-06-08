@@ -6319,6 +6319,10 @@ function openAdminVoidsWithPin() {
     customerNameForPrint: string;
     paymentMethodName: string;
     cartSnapshot?: CartItem[];
+    subtotalForPrint?: number;
+    discountForPrint?: number;
+    taxForPrint?: number;
+    grandTotalForPrint?: number;
   }) {
     const electronPOS = (window as any).electronPOS;
     if (!electronPOS) {
@@ -6354,10 +6358,13 @@ function openAdminVoidsWithPin() {
       };
     });
 
-    const subtotalForPrint = printItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
-    const discountForPrint = Number((redeemablePoints || 0) + (appliedBillDiscount || 0));
-    const taxForPrint = Number(cartTaxTotal || 0);
-    const grandTotalForPrint = Math.max(0, subtotalForPrint - discountForPrint + taxForPrint);
+    const computedSubtotalForPrint = printItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const subtotalForPrint = Number(params.subtotalForPrint ?? computedSubtotalForPrint);
+    const discountForPrint = Number(params.discountForPrint ?? 0);
+    const taxForPrint = Number(params.taxForPrint ?? 0);
+    const grandTotalForPrint = Number(
+      params.grandTotalForPrint ?? Math.max(0, subtotalForPrint - discountForPrint + taxForPrint)
+    );
     const safeCustomerName = params.customerNameForPrint || "Guest";
     const safePaymentMethod = params.paymentMethodName || "";
 
@@ -7525,6 +7532,10 @@ function openAdminVoidsWithPin() {
           customerNameForPrint: customer?.name || customerNameSnapshot || "Guest",
           paymentMethodName: selectedPaymentMethodName,
           cartSnapshot,
+          subtotalForPrint: Number(orderRow.subtotal ?? cartSubtotal ?? 0),
+          discountForPrint: Number(orderRow.discount_total ?? (redeemablePoints + appliedBillDiscount) ?? 0),
+          taxForPrint: Number(orderRow.tax_total ?? cartTaxTotal ?? 0),
+          grandTotalForPrint: Number(orderRow.total ?? cartGrandTotal ?? 0),
         });
 
         printSummary = `${printResult.receiptStatus} | ${printResult.kitchenStatus} | ${printResult.stickerStatus}`;
@@ -13097,6 +13108,3 @@ function openAdminVoidsWithPin() {
     </main>
   );
 }
-
-
-
