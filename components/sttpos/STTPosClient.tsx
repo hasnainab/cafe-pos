@@ -6407,7 +6407,9 @@ function openAdminVoidsWithPin() {
   ${rowsHtml}
   <div class="divider"></div>
   <div class="total-row"><span>Subtotal</span><span>${formatCurrency(subtotalForPrint)}</span></div>
-  ${discountForPrint > 0 ? `<div class="total-row"><span>Discount</span><span>- ${formatCurrency(discountForPrint)}</span></div>` : ""}`r`n  <div class="total-row"><span>Sales Tax</span><span>${formatCurrency(taxForPrint)}</span></div>`r`n  <div class="total-row"><span>Total</span><span>${formatCurrency(grandTotalForPrint)}</span></div>
+  ${discountForPrint > 0 ? `<div class="total-row"><span>Discount</span><span>- ${formatCurrency(discountForPrint)}</span></div>` : ""}
+  <div class="total-row"><span>Sales Tax</span><span>${formatCurrency(taxForPrint)}</span></div>
+  <div class="total-row"><span>Total</span><span>${formatCurrency(grandTotalForPrint)}</span></div>
 </body>
 </html>`;
 
@@ -13095,5 +13097,6 @@ function openAdminVoidsWithPin() {
     </main>
   );
 }
+
 
 
