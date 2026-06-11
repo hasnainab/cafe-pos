@@ -2560,9 +2560,9 @@ function openAdminVoidsWithPin() {
       return;
     }
     const textMessage = encodeURIComponent(campaignMessage.trim());
-    const url = `https://web.whatsapp.com/send?phone=${phone}&text=${textMessage}`;
+    const url = `whatsapp://send?phone=${phone}&text=${textMessage}`;
     window.open(url, "_blank");
-    setStatusMessage(`WhatsApp opened for ${customer.customer.name || customer.customer.phone}`);
+    setStatusMessage(`WhatsApp app opened for ${customer.customer.name || customer.customer.phone}`);
   }
 
   function openSelectedCampaignCustomers() {
@@ -2575,10 +2575,10 @@ function openAdminVoidsWithPin() {
       const phone = item.customer.phone ? normalizePhoneForWhatsApp(item.customer.phone) : "";
       if (!phone) return;
       const textMessage = encodeURIComponent(campaignMessage.trim());
-      const url = `https://web.whatsapp.com/send?phone=${phone}&text=${textMessage}`;
+      const url = `whatsapp://send?phone=${phone}&text=${textMessage}`;
       setTimeout(() => window.open(url, "_blank"), index * 250);
     });
-    setStatusMessage(`Opened WhatsApp for ${Math.min(selected.length,25)} selected customers`);
+    setStatusMessage(`Opened WhatsApp app for ${Math.min(selected.length,25)} selected customers`);
   }
 
   function getCustomerFavoriteItems(orders: OrderView[]) {
@@ -7591,7 +7591,7 @@ function openAdminVoidsWithPin() {
     }
 
     if (customerPhone && message) {
-      const url = `https://web.whatsapp.com/send?phone=${customerPhone}&text=${message}`;
+      const url = `whatsapp://send?phone=${customerPhone}&text=${message}`;
       if (pendingWindow && !pendingWindow.closed) {
         pendingWindow.location.href = url;
       } else {
@@ -7944,7 +7944,7 @@ function openAdminVoidsWithPin() {
       return;
     }
 
-    const url = `https://web.whatsapp.com/send?phone=${phone}&text=${message}`;
+    const url = `whatsapp://send?phone=${phone}&text=${message}`;
 
     if (pendingWindow && !pendingWindow.closed) {
       pendingWindow.location.href = url;
@@ -7954,7 +7954,7 @@ function openAdminVoidsWithPin() {
 
     await refreshAll();
     if (selectedCustomerId) await loadCustomerDetailById(selectedCustomerId);
-    setStatusMessage(`Reminder ${reminderNumber} opened in WhatsApp`);
+    setStatusMessage(`Reminder ${reminderNumber} opened in WhatsApp app`);
   }
 
   function getPaymentLabel(order: OrderView) {
